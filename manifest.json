@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Moodle Course Archiver",
+  "description": "Save Moodle course files for offline study.",
+  "version": "0.1",
+
+  "permissions": [
+    "downloads",
+    "downloads.shelf",
+    "storage",
+    "scripting",
+    "activeTab"
+  ],
+
+  "host_permissions": [
+    "https://moodle.pmf.uns.ac.rs/*",
+    "https://*/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "action": {
+    "default_popup": "popup.html"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://moodle.pmf.uns.ac.rs/course/view.php*"],
+      "js": ["content_script.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
