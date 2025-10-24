@@ -138,12 +138,18 @@ chrome.runtime.onMessage.addListener((msg) => {
         }
       }
 
-      // Create the folder path: CourseName/SectionName/filename
+      // Create the folder path: CourseName/SectionName/[FolderModuleName]/filename
       let folderPath = courseName;
       if (f.sectionTitle && f.sectionTitle.trim()) {
         folderPath += `/${f.sectionTitle}`;
       }
-      
+
+      // If the file was discovered inside a folder module, place it inside that folder
+      if (f.folderName && f.folderName.trim()) {
+        const cleanFolder = f.folderName.replace(/[\/\\?%*:|"<>]/g, '_').trim().slice(0, 100);
+        folderPath += `/${cleanFolder}`;
+      }
+
       const filename = `${folderPath}/${name}`;
 
       chrome.downloads.download({

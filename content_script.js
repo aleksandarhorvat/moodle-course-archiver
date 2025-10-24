@@ -90,9 +90,50 @@ async function processSections() {
         sectionFiles.push({ href, text });
       }
       
-      // Handle folder modules (Direktorijum) - mark them specially
+      // Handle folder modules (Direktorijum) - fetch page in page context and extract files
       else if (href.includes('/mod/folder/')) {
-        sectionFiles.push({ href, text, isFolder: true });
+        // Attempt to fetch the folder page from the page (has cookies) and extract pluginfile links
+        try {
+          const folderResp = await fetch(href);
+          const folderHtml = await folderResp.text();
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(folderHtml, 'text/html');
+
+          // Folder module usually lists files with links to pluginfile.php
+          const links = Array.from(doc.querySelectorAll('a[href*="/pluginfile.php"]'));
+
+          // Clean folder/module name to use as subfolder name
+          // Remove common labels like "Direktorijum" (and common misspellings), then sanitize
+          const folderCleanName = (text || href)
+            .replace(/\bDirektorijum\b/gi, '')
+            .replace(/\bDirektorijujm\b/gi, '')
+            .replace(/\bFolder\b/gi, '')
+            .replace(/[\/\\?%*:|"<>]/g, '_')
+            .trim()
+            .replace(/^[-_\s]+|[-_\s]+$/g, '') // trim leading/trailing separators
+            .slice(0, 100);
+
+          if (links.length > 0) {
+            links.forEach(link => {
+              const fileHref = link.href;
+              const fileText = link.textContent?.trim() || link.getAttribute('title') || fileHref;
+              const cleanFileText = fileText
+                .replace(/[\/\\?%*:|"<>]/g, '_')
+                .trim()
+                .slice(0, 200);
+
+              // Push each file found inside the folder as an individual entry and attach folderName
+              sectionFiles.push({ href: fileHref, text: cleanFileText, folderName: folderCleanName });
+            });
+          } else {
+            // If we couldn't find pluginfile links, keep the folder link as a fallback so background can try
+            sectionFiles.push({ href, text, isFolder: true });
+          }
+        } catch (e) {
+          console.warn('Error fetching folder page in content script:', href, e);
+          // Fallback to adding the folder link so background will attempt to process it
+          sectionFiles.push({ href, text, isFolder: true });
+        }
       }
       
       // Handle mod/url links - check if they point to files
