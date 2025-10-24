@@ -4,58 +4,120 @@
     <meta charset="utf-8" />
     <title>Moodle Course Archiver</title>
     <style>
-      body { font-family: Arial, sans-serif; width: 380px; padding: 10px; }
-      #files { max-height: 320px; overflow:auto; border:1px solid #ddd; padding:6px; }
+      /* Moodle-like light theme with dark fallback */
+      :root{
+        --bg: #ffffff;
+        --panel: #fbfbfb;
+        --text: #212121;
+        --muted: #5a5a5a;
+        --accent: #f9810a; /* Moodle orange chosen by user */
+        --button-border: rgba(0,0,0,0.08);
+        --button-bg: #ffffff;
+        --button-hover: #fffaf6;
+        --shadow: rgba(0,0,0,0.06);
+      }
+
+      /* Dark theme overrides */
+      .dark {
+        --bg: #0f1112;
+        --panel: #111314;
+        --text: #e6e6e6;
+        --muted: #bfcfc1;
+        --accent: #f9810a;
+        --button-border: rgba(255,255,255,0.06);
+        --button-bg: #141516;
+        --button-hover: rgba(255,255,255,0.03);
+        --shadow: rgba(0,0,0,0.6);
+      }
+
+      html, body { margin:0; }
+      body { font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; width: 400px; padding: 12px; background: var(--bg); color: var(--text); }
+      .header { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+      .brand { display:flex; align-items:center; gap:10px; }
+      .logo { width:36px; height:36px; border-radius:6px; box-shadow: 0 2px 6px var(--shadow); }
+      h3 { margin:0; font-size:15px; font-weight:600; }
+      .theme-control { display:flex; align-items:center; gap:8px; }
+      .theme-label { font-size:12px; color:var(--muted); }
+
+      #files { max-height: 320px; overflow:auto; border:1px solid rgba(0,0,0,0.04); padding:10px; background: var(--panel); border-radius:10px; box-shadow: 0 4px 12px var(--shadow); }
       .section { 
-        margin-top: 10px; 
-        margin-bottom: 5px; 
+        margin-top: 8px; 
+        margin-bottom: 6px; 
         padding: 8px; 
-        background-color: #f5f5f5; 
-        border-radius: 4px; 
-        font-size: 14px; 
-        font-weight: bold;
-        border-left: 3px solid #007cba;
+        background-color: transparent; 
+        border-radius: 6px; 
+        font-size: 13px; 
+        font-weight: 600;
+        border-left: 4px solid var(--accent);
+        color: var(--text);
       }
       .section:first-child { margin-top: 0; }
       .file { 
         display: flex; 
         align-items: center; 
-        margin-bottom: 4px; 
-        margin-left: 15px;
-        padding: 2px 0;
+        margin-bottom: 8px; 
+        margin-left: 12px;
+        padding: 6px 8px;
+        border-radius: 6px;
       }
-      .file input { margin-right: 8px; }
+      .file input { margin-right: 10px; accent-color: var(--accent); width:16px; height:16px; }
       .file label { 
-        font-size: 12px; 
-        color: #666; 
+        font-size: 13px; 
+        color: var(--muted); 
         cursor: pointer;
         flex: 1;
         word-wrap: break-word;
       }
-      .file:hover { background-color: #f9f9f9; }
-      button { margin-top: 8px; margin-right: 5px; }
-      .button-group { display: flex; gap: 5px; }
-      .select-buttons { margin-bottom: 8px; }
-      .select-buttons button { 
-        font-size: 11px; 
-        padding: 4px 8px; 
-        background: #f0f0f0;
-        border: 1px solid #ccc;
-        cursor: pointer;
-      }
-      .select-buttons button:hover { background: #e0e0e0; }
+      .file:hover { background-color: rgba(249,129,10,0.04); }
+
+      .controls { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:10px; }
+  button { margin-top: 8px; margin-right: 5px; background: var(--button-bg); color: var(--text); border: 1px solid var(--button-border); padding:8px 10px; border-radius:8px; cursor:pointer; box-shadow: 0 2px 6px var(--shadow); }
+      #download { background: var(--accent); color: #fff; border: none; }
+      .select-buttons { margin-bottom: 8px; display:flex; gap:8px; }
+  .select-buttons button { font-size: 13px; padding: 6px 10px; background: var(--button-bg); border: 1px solid var(--button-border); color: var(--text); cursor: pointer; border-radius:8px; }
+  .select-buttons button:hover { background: var(--button-hover); }
+
+      /* Toggle switch */
+      .switch { position: relative; display: inline-block; width:44px; height:24px; }
+      .switch input { display:none; }
+      .slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#ddd; border-radius:24px; transition:.2s; box-shadow: inset 0 1px 2px rgba(0,0,0,0.06); }
+      .slider:before { content:''; position:absolute; height:18px; width:18px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; box-shadow:0 2px 4px rgba(0,0,0,0.12); }
+      input:checked + .slider { background: var(--accent); }
+      input:checked + .slider:before { transform: translateX(20px); }
+
+      label { user-select: none; }
+      input[type="checkbox"] { width: 16px; height:16px; accent-color: var(--accent); }
     </style>
   </head>
   <body>
-    <h3>Moodle Course Archiver</h3>
+    <div class="header">
+      <div class="brand">
+        <img src="icon.png" alt="logo" class="logo" />
+        <h3>Moodle Course Archiver</h3>
+      </div>
+      <div class="theme-control">
+        <label class="theme-label">Theme</label>
+        <label class="switch">
+          <input type="checkbox" id="theme-toggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
     <div class="select-buttons">
       <button id="select-all">Select all</button>
       <button id="select-none">Select none</button>
     </div>
+
     <div id="files">Scanning page...</div>
-    <div class="button-group">
-      <button id="refresh">Refresh list</button>
-      <button id="download" disabled>Download selected</button>
+
+    <div class="controls">
+      <div>
+        <button id="refresh">Refresh list</button>
+      </div>
+      <div>
+        <button id="download" disabled>Download selected</button>
+      </div>
     </div>
 
     <script src="popup.js"></script>

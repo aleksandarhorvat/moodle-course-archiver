@@ -1,9 +1,33 @@
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   const filesDiv = document.getElementById('files');
   const downloadBtn = document.getElementById('download');
   const refreshBtn = document.getElementById('refresh');
   const selectAllBtn = document.getElementById('select-all');
   const selectNoneBtn = document.getElementById('select-none');
+  const themeToggle = document.getElementById('theme-toggle');
+
+  // Apply stored theme preference (default: light)
+  function applyTheme(theme) {
+    if (theme === 'dark') document.documentElement.classList.add('dark');
+    else document.documentElement.classList.remove('dark');
+  }
+
+  try {
+    const stored = await chrome.storage.local.get('popupTheme');
+    const pref = stored.popupTheme || 'light';
+    applyTheme(pref);
+    if (themeToggle) themeToggle.checked = (pref === 'dark');
+  } catch (e) {
+    // ignore
+  }
+
+  if (themeToggle) {
+    themeToggle.addEventListener('change', async () => {
+      const theme = themeToggle.checked ? 'dark' : 'light';
+      applyTheme(theme);
+      try { await chrome.storage.local.set({ popupTheme: theme }); } catch (e) {}
+    });
+  }
 
   async function getCurrentCourseKey() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
