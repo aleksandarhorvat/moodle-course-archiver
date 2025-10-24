@@ -1,146 +1,75 @@
 # Moodle Course Archiver
 
-A Chrome extension that helps you download and archive files from Moodle courses for offline study.
+A small Chrome extension that helps you collect files from a Moodle course so you can study offline.
 
-## Features
+This extension scans a course page, lists downloadable files by section, and lets you save chosen files into a folder structure on your machine.
 
-- 🔍 Automatically scans Moodle course pages for downloadable files
-- 📁 Organizes downloads by course sections
-- 📄 Supports various file types (PDF, DOC, PPT, XLS, etc.)
-- 🔗 Handles Google Docs/Sheets/Slides links by converting them to downloadable formats
-- 📂 Extracts files from Moodle folder modules
-- 🎯 Selective downloading - choose which files to download
+## What it does
 
-## Installation
+- Scans course sections for direct file links and common Moodle modules.
+- Extracts files inside "folder" modules and lists them individually so you can pick which ones to download.
+- Converts some Google Docs links into export URLs when possible.
+- Downloads files into a folder structure organized by course and section.
 
-1. **Download the Extension Files**
-   - Clone this repository or download it as a ZIP file
-   - Extract the files to a folder on your computer
+## Install (developer mode)
 
-2. **Enable Developer Mode in Chrome**
-   - Open Chrome and navigate to `chrome://extensions/`
-   - Toggle the "Developer mode" switch in the top-right corner
+1. Clone or download this repository and extract it to a local folder.
+2. Open Chrome and go to `chrome://extensions/`.
+3. Enable "Developer mode" (toggle in the top-right).
+4. Click "Load unpacked" and choose the folder with the extension files.
 
-3. **Load the Extension**
-   - Click "Load unpacked" button
-   - Select the folder containing the extension files
-   - The extension should now appear in your extensions list
+The extension should appear in the list. You can pin it to the toolbar if you use it often.
 
-4. **Pin the Extension (Optional)**
-   - Click the puzzle piece icon (🧩) in Chrome's toolbar
-   - Find "Moodle Course Archiver" and click the pin icon to keep it visible
+## How to use
 
-## How to Use
+1. Open a Moodle course page in your browser.
+2. Click the extension icon. The popup will show files found on the page, grouped by section.
+3. Select the files you want and click "Download selected". You will be asked for a folder name for the course.
 
-1. **Navigate to a Moodle Course**
-   - Go to your Moodle site and open any course page
-   - The extension currently supports `moodle.pmf.uns.ac.rs` but can be modified for other Moodle instances
+Notes:
+- If a folder module contains files, the extension will attempt to extract those files and present them as individual items. If extraction fails, the folder may appear as a single entry and the extension will try to fall back to a background fetch.
+- For pages that require login, the extension extracts folder contents from the page context so it will work with authenticated courses.
 
-2. **Open the Extension**
-   - Click the Moodle Course Archiver icon in your browser toolbar
-   - The extension will automatically scan the page for downloadable files
+## Supported file types
 
-3. **Select Files to Download**
-   - Review the list of files organized by course sections
-   - Check the boxes next to files you want to download
-   - Use "Select all" or "Select none" buttons for quick selection
+Common formats are supported, including PDF, Word, PowerPoint, Excel, text and archives. Google Docs/Sheets/Slides links are converted to downloadable export URLs when possible.
 
-4. **Download Files**
-   - Click "Download selected" button
-   - Enter a folder name for organizing your downloads
-   - Files will be automatically downloaded and organized in folders by section
+## Using this with a different Moodle site
 
-## Supported File Types
-
-- **Direct Files**: PDF, DOC, DOCX, PPT, PPTX, XLS, XLSX, TXT, RTF, ZIP, RAR
-- **Google Services**: Google Docs, Sheets, and Presentations (automatically converted to downloadable formats)
-- **Moodle Modules**: 
-  - Resource files
-  - Folder contents
-  - Book modules (saved as HTML)
-  - Page modules (saved as HTML)
-
-## Configuration for Other Moodle Sites
-
-To use this extension with a different Moodle installation:
-
-1. Open `manifest.json`
-2. Update the `host_permissions` and `content_scripts.matches` arrays with your Moodle site URL:
-
-```json
-{
-  "host_permissions": [
-    "https://your-moodle-site.com/*",
-    "https://*/*"
-  ],
-  "content_scripts": [
-    {
-      "matches": ["https://your-moodle-site.com/course/view.php*"],
-      "js": ["content_script.js"],
-      "run_at": "document_idle"
-    }
-  ]
-}
-```
-
-3. Reload the extension in Chrome
+If you want the extension to run on a different Moodle instance, open `manifest.json` and update the `host_permissions` and `content_scripts.matches` entries to include your site URL (for example `https://your-moodle-site.example/*` and `https://your-moodle-site.example/course/view.php*`). Then reload the extension.
 
 ## Troubleshooting
 
-### Extension Not Working
-- Make sure you're on a Moodle course page (not the dashboard or other pages)
-- Try clicking "Refresh list" in the extension popup
-- Check if the Moodle site URL matches the configuration in `manifest.json`
+- If the extension shows "No files found", make sure the course page has finished loading and then click "Refresh list" in the popup.
+- If a file doesn't download, check Chrome's downloads page and any browser security prompts.
+- If a folder's contents aren't listed, the folder page might render dynamically; in that case the extension may need a small fallback to run extraction after rendering. Tell me if you see that and I can add it.
 
-### No Files Found
-- Ensure the course page has loaded completely
-- Some files might be restricted or require special permissions
-- Try refreshing the page and reopening the extension
+## How downloads are organized on disk
 
-### Download Issues
-- Check Chrome's download settings and permissions
-- Some files might be blocked by your browser's security settings
-- Large files might take time to process
+Files are saved under the course folder you provide, then grouped by section and (when applicable) by the folder module name. For example:
 
-### Permission Errors
-- The extension needs permission to access your Moodle site
-- Make sure you've granted the necessary permissions when installing
-
-## File Organization
-
-Downloaded files are organized as follows:
 ```
 CourseName/
-├── Section 1 Name/
-│   ├── file1.pdf
-│   └── file2.docx
-├── Section 2 Name/
-│   ├── presentation.pptx
-│   └── FolderName/
-│       ├── subfolder_file1.pdf
-│       └── subfolder_file2.txt
-└── ...
+   Section Name/
+      file1.pdf
+      file2.docx
+   Another Section/
+      Folder Module Name/
+         inside-file.pdf
 ```
 
-## Privacy and Security
+## Privacy
 
-- The extension only accesses Moodle pages you visit
-- No data is sent to external servers
-- Files are downloaded directly to your computer
-- Course data is stored locally in Chrome's storage
+The extension only accesses Moodle pages you open in your browser and stores course file lists locally in Chrome's storage. Files are downloaded directly to your computer; the extension does not send course content to any external servers.
 
 ## Contributing
 
-Feel free to submit issues, feature requests, or pull requests to improve this extension.
+If you find bugs or have ideas for improvements, open an issue or submit a pull request.
 
 ## License
 
-This project is open source. Please check the license file for details.
+This project is open source; see the repository license for details.
 
-## Version History
+## Change log
 
-- **v0.1** - Initial release
-  - Basic file detection and downloading
-  - Support for common file types
-  - Section-based organization
-  - Google Docs integration
+- v0.1 — Initial implementation: scans course pages, lists files, and downloads selected items.
