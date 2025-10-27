@@ -27,9 +27,17 @@ chrome.runtime.onMessage.addListener((msg) => {
               .slice(0, 100);
             
             // Download each file in the folder
+            // Build folder path: Course / Section / SubSection / FolderModule / filename
+            let folderPath = courseName;
+            folderPath += `/${f.sectionName || f.sectionTitle || 'Unknown'}`;
+            if (f.subSectionName && f.subSectionName.trim()) {
+              folderPath += `/${f.subSectionName.replace(/[\/\\?%*:|"<>]/g, '_').trim().slice(0,100)}`;
+            }
+            folderPath += `/${(f.text || '').replace(/[\/\\?%*:|"<>]/g, '_').slice(0,100)}`;
+
             chrome.downloads.download({
               url: fileUrl,
-              filename: `${courseName}/${f.sectionName || 'Unknown'}/${f.text.replace(/[\/\\?%*:|"<>]/g, '_')}/${cleanFileName}`,
+              filename: `${folderPath}/${cleanFileName}`,
               saveAs: false
             });
           });
@@ -41,11 +49,10 @@ chrome.runtime.onMessage.addListener((msg) => {
       }
 
       let url = f.href;
-      let name = (f.text || f.href)
-        .replace(/\bDatoteka\b/gi, '')  // remove word
-        .replace(/[\/\\?%*:|"<>]/g, '_')
-        .trim()
-        .slice(0, 100);
+      let name = (f.text || f.href) || '';
+      // Remove common Moodle suffixes that appear in the text (accesshide labels)
+      name = name.replace(/\b(URL adresa|Stranica|Datoteka|URL)\b/gi, '');
+      name = name.replace(/[\/\\?%*:|"<>]/g, '_').trim().slice(0, 100);
 
       // Handle Moodle URL modules that need URL extraction
       if (f.needsUrlExtraction && url.includes('/mod/url/')) {
@@ -138,10 +145,16 @@ chrome.runtime.onMessage.addListener((msg) => {
         }
       }
 
-      // Create the folder path: CourseName/SectionName/[FolderModuleName]/filename
+      // Create the folder path: CourseName/SectionName/SubSectionName/[FolderModuleName]/filename
       let folderPath = courseName;
       if (f.sectionTitle && f.sectionTitle.trim()) {
         folderPath += `/${f.sectionTitle}`;
+      }
+
+      // If the file was discovered inside a subsection/activity (e.g. "Vežbe 1"), add it
+      if (f.subSectionName && f.subSectionName.trim()) {
+        const cleanSub = f.subSectionName.replace(/[\/\\?%*:|"<>]/g, '_').trim().slice(0, 100);
+        folderPath += `/${cleanSub}`;
       }
 
       // If the file was discovered inside a folder module, place it inside that folder
