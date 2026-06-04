@@ -27,6 +27,39 @@ chrome.runtime.onMessage.addListener((msg) => {
       return name;
     }
 
+    function cleanMoodleLabel(text) {
+      if (!text) return text;
+      return text
+        .replace(/(URL adresa|Stranica|Datoteka|URL|URL адреса|Страница|Датотека|Фајл)/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    async function resolveMoodleResourceUrl(url) {
+      if (!/\/mod\/resource\/view\.php/i.test(url)) {
+        return url;
+      }
+
+      try {
+        const response = await fetch(url);
+        const html = await response.text();
+
+        const pluginFileMatch = html.match(/href="([^"]*\/pluginfile\.php[^"]*)"/i);
+        if (pluginFileMatch && pluginFileMatch[1]) {
+          return new URL(pluginFileMatch[1], url).href;
+        }
+
+        const downloadMatch = html.match(/href="([^"]*download=1[^"]*)"/i);
+        if (downloadMatch && downloadMatch[1]) {
+          return new URL(downloadMatch[1], url).href;
+        }
+      } catch (e) {
+        console.warn('Error resolving Moodle resource URL:', url, e);
+      }
+
+      return url;
+    }
+
     files.forEach(async f => {
       // Handle folder modules (Direktorijum) differently
       if (f.isFolder) {
@@ -42,7 +75,7 @@ chrome.runtime.onMessage.addListener((msg) => {
           
           fileLinks.forEach(link => {
             const fileUrl = link.href;
-            const fileName = link.textContent?.trim() || link.getAttribute('title') || 'file';
+            const fileName = cleanMoodleLabel(link.textContent?.trim() || link.getAttribute('title') || 'file');
             
             // Clean up filename
             const cleanFileName = fileName
@@ -73,9 +106,7 @@ chrome.runtime.onMessage.addListener((msg) => {
       }
 
       let url = f.href;
-      let name = (f.text || f.href) || '';
-      // Remove common Moodle suffixes that appear in the text (accesshide labels)
-      name = name.replace(/\b(URL adresa|Stranica|Datoteka|URL)\b/gi, '');
+      let name = cleanMoodleLabel((f.text || f.href) || '');
       name = name.replace(/[\/\\?%*:|"<>]/g, '_').trim().slice(0, 100);
 
       // Handle Moodle URL modules that need URL extraction
@@ -122,6 +153,8 @@ chrome.runtime.onMessage.addListener((msg) => {
           return; // Skip this file
         }
       }
+
+      url = await resolveMoodleResourceUrl(url);
 
       // Convert Google Docs/Sheets/Slides links to export links
       try {

@@ -75,8 +75,8 @@ async function checkUrlForFile(url) {
 // Helper to clean display text by removing common type labels (accesshide content)
 function cleanDisplayText(raw) {
   if (!raw) return raw;
-  // Remove common suffixes that Moodle adds for accessibility like "URL adresa", "Stranica", "Datoteka"
-  let s = raw.replace(/\b(URL adresa|Stranica|Datoteka|URL)\b/gi, '');
+  // Remove common suffixes that Moodle adds for accessibility in Latin and Cyrillic.
+  let s = raw.replace(/(URL adresa|Stranica|Datoteka|URL|URL адреса|Страница|Датотека|Фајл)/gi, '');
   // Collapse whitespace and trim
   s = s.replace(/\s+/g, ' ').trim();
   return s;
