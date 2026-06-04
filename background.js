@@ -1,290 +1,192 @@
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === 'download-files') {
-    const files = msg.files || [];
-    const courseName = msg.courseName || 'MyCourse';
+// Moodle Course Archiver - background service worker.
+//
+// - Downloads the jobs prepared by the popup (files, web-link shortcuts and
+//   saved Moodle pages) into the Downloads folder, paced so Moodle isn't flooded.
+// - Fixes file extensions after the server answers (Google Drive, unknown links).
+// - Probes external links for the scanner to tell files from web pages
+//   (the service worker isn't bound by CORS thanks to host permissions).
 
-    async function looksLikeIpynb(url) {
-      try {
-        const response = await fetch(url, { credentials: 'include' });
-        if (!response.ok) return false;
+const START_INTERVAL_MS = 150;
+const PROBE_TIMEOUT_MS = 10000;
 
-        const body = await response.text();
-        const parsed = JSON.parse(body);
-        return parsed && typeof parsed === 'object' && Array.isArray(parsed.cells) && parsed.nbformat != null;
-      } catch (e) {
-        return false;
-      }
+// Downloads started by us, waiting for Chrome to ask for their filename.
+// Keyed by the requested URL; values are FIFO lists of target paths.
+const pendingByUrl = new Map();
+const pathById = new Map();
+
+function extOf(name) {
+  const m = (name || '').match(/(\.[a-z0-9]{1,8})$/i);
+  return m ? m[1].toLowerCase() : '';
+}
+
+function basename(p) {
+  return (p || '').split(/[\\/]/).pop();
+}
+
+// Chrome asks every extension listening here for the name of *every* download,
+// so only touch the ones we started.
+chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+  let job = pathById.get(item.id);
+  if (!job) {
+    const list = pendingByUrl.get(item.url);
+    if (list && list.length) {
+      job = list.shift();
+      if (list.length === 0) pendingByUrl.delete(item.url);
+      pathById.set(item.id, job);
     }
-
-    async function normalizeNotebookExtension(url, name) {
-      let resolvedName = name;
-
-      try {
-        const urlObj = new URL(url);
-        const pathExtMatch = urlObj.pathname.match(/\.([a-z0-9]+)$/i);
-        if (pathExtMatch && pathExtMatch[0].toLowerCase() === '.ipynb') {
-          if (/\.json$/i.test(resolvedName)) {
-            return resolvedName.replace(/\.json$/i, '.ipynb');
-          }
-          if (!/\.ipynb$/i.test(resolvedName)) {
-            return `${resolvedName}.ipynb`;
-          }
-        }
-      } catch (e) {
-        // fall through to content-based detection
-      }
-
-      if (!resolvedName) return resolvedName;
-      if (await looksLikeIpynb(url)) {
-        if (/\.ipynb$/i.test(resolvedName)) {
-          return resolvedName;
-        }
-        if (/\.[^./\\]+$/i.test(resolvedName)) {
-          return resolvedName.replace(/\.[^./\\]+$/i, '.ipynb');
-        }
-        return `${resolvedName}.ipynb`;
-      }
-      return resolvedName;
-    }
-
-    function cleanMoodleLabel(text) {
-      if (!text) return text;
-      return text
-        .replace(/(URL adresa|Stranica|Datoteka|URL|URL адреса|Страница|Датотека|Фајл)/gi, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-    }
-
-    async function resolveMoodleResourceUrl(url) {
-      if (!/\/mod\/resource\/view\.php/i.test(url)) {
-        return url;
-      }
-
-      try {
-        const response = await fetch(url, { credentials: 'include' });
-        if (!response.ok) return url;
-        const html = await response.text();
-
-        // Common patterns: direct pluginfile links, download=1 links, data-fileurl/data-url attrs
-        const patterns = [
-          /href="([^"]*\/pluginfile\.php[^"]*)"/i,
-          /href='([^']*\/pluginfile\.php[^']*)'/i,
-          /href="([^"]*download=1[^"]*)"/i,
-          /href='([^']*download=1[^']*)'/i,
-          /data-fileurl="([^"]+)"/i,
-          /data-fileurl='([^']+)'/i,
-          /data-url="([^"]+)"/i,
-          /data-url='([^']+)'/i,
-          /<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["']?\d+;\s*url=([^"'>]+)["']?/i,
-          /window\.location(?:\.href)?\s*=\s*['"]([^'"]+)['"]/i,
-          /location\.href\s*=\s*['"]([^'"]+)['"]/i
-        ];
-
-        for (const pat of patterns) {
-          const m = html.match(pat);
-          if (m && m[1]) {
-            try {
-              return new URL(m[1], url).href;
-            } catch (e) {
-              // fallback to raw string
-              return m[1];
-            }
-          }
-        }
-
-        // As a last resort, try to find any link that contains .ipynb
-        const ipynbMatch = html.match(/href=["']([^"']+\.ipynb[^"']*)["']/i);
-        if (ipynbMatch && ipynbMatch[1]) {
-          return new URL(ipynbMatch[1], url).href;
-        }
-      } catch (e) {
-        console.warn('Error resolving Moodle resource URL:', url, e);
-      }
-
-      return url;
-    }
-
-    files.forEach(async f => {
-      // Handle folder modules (Direktorijum) differently
-      if (f.isFolder) {
-        try {
-          // Fetch the folder page to get all files within it
-          const response = await fetch(f.href);
-          const html = await response.text();
-          const parser = new DOMParser();
-          const doc = parser.parseFromString(html, 'text/html');
-          
-          // Find all file links in the folder
-          const fileLinks = Array.from(doc.querySelectorAll('a[href*="/pluginfile.php"]'));
-          
-          fileLinks.forEach(link => {
-            const fileUrl = link.href;
-            const fileName = cleanMoodleLabel(link.textContent?.trim() || link.getAttribute('title') || 'file');
-            
-            // Clean up filename
-            const cleanFileName = fileName
-              .replace(/[\/\\?%*:|"<>]/g, '_')
-              .trim()
-              .slice(0, 100);
-            
-            // Download each file in the folder
-            // Build folder path: Course / Section / SubSection / FolderModule / filename
-            let folderPath = courseName;
-            folderPath += `/${f.sectionName || f.sectionTitle || 'Unknown'}`;
-            if (f.subSectionName && f.subSectionName.trim()) {
-              folderPath += `/${f.subSectionName.replace(/[\/\\?%*:|"<>]/g, '_').trim().slice(0,100)}`;
-            }
-            folderPath += `/${(f.text || '').replace(/[\/\\?%*:|"<>]/g, '_').slice(0,100)}`;
-
-            chrome.downloads.download({
-              url: fileUrl,
-              filename: `${folderPath}/${cleanFileName}`,
-              saveAs: false
-            });
-          });
-          
-        } catch (error) {
-          console.error('Error processing folder:', f.href, error);
-        }
-        return; // Don't process as regular file
-      }
-
-      let url = f.href;
-      let name = cleanMoodleLabel((f.text || f.href) || '');
-      name = name.replace(/[\/\\?%*:|"<>]/g, '_').trim().slice(0, 100);
-
-      // Handle Moodle URL modules that need URL extraction
-      if (f.needsUrlExtraction && url.includes('/mod/url/')) {
-        try {
-          // Fetch the Moodle URL page to extract the actual URL
-          const response = await fetch(url);
-          const html = await response.text();
-          
-          // Look for the actual URL in the page content - prioritize .urlworkaround pattern
-          const urlworkaroundMatch = html.match(/<div class="urlworkaround">.*?<a href="([^"]+)">/i);
-          
-          let urlMatch = null;
-          if (urlworkaroundMatch && urlworkaroundMatch[1]) {
-            urlMatch = [null, urlworkaroundMatch[1]];
-          } else {
-            // Fallback patterns if urlworkaround is not found
-            urlMatch = html.match(/window\.open\('([^']+)'/i) ||
-                      html.match(/<a[^>]+href="([^"]+)"[^>]*>.*?click here to open resource/i) ||
-                      html.match(/location\.href\s*=\s*['"]([^'"]+)['"]/i) ||
-                      html.match(/<iframe[^>]+src="([^"]+)"/i);
-          }
-          
-          if (urlMatch && urlMatch[1]) {
-            const actualUrl = urlMatch[1];
-            // Check if this looks like a document
-            if (actualUrl.match(/\.(pdf|doc|docx|ppt|pptx|xls|xlsx|txt|rtf|zip|rar)$/i) ||
-                actualUrl.includes('docs.google.com') ||
-                actualUrl.includes('drive.google.com') ||
-                actualUrl.includes('dropbox.com') ||
-                actualUrl.includes('onedrive.com')) {
-              url = actualUrl;
-              console.log('Extracted URL from Moodle page:', actualUrl);
-            } else {
-              console.log('Skipping non-document URL:', actualUrl);
-              return; // Skip this file
-            }
-          } else {
-            console.log('Could not extract URL from Moodle page:', url);
-            return; // Skip this file
-          }
-        } catch (e) {
-          console.warn('Error extracting URL from Moodle page:', e);
-          return; // Skip this file
-        }
-      }
-
-      url = await resolveMoodleResourceUrl(url);
-
-      // Convert Google Docs/Sheets/Slides links to export links
-      try {
-        const gdocMatch = url.match(/https:\/\/docs\.google\.com\/document\/d\/([^\/]+)/);
-        const gsheetMatch = url.match(/https:\/\/docs\.google\.com\/spreadsheets\/d\/([^\/]+)/);
-        const gslideMatch = url.match(/https:\/\/docs\.google\.com\/presentation\/d\/([^\/]+)/);
-
-        if (gdocMatch) {
-          url = `https://docs.google.com/document/d/${gdocMatch[1]}/export?format=pdf`;
-          name += '.pdf';
-        } else if (gsheetMatch) {
-          url = `https://docs.google.com/spreadsheets/d/${gsheetMatch[1]}/export?format=xlsx`;
-          name += '.xlsx';
-        } else if (gslideMatch) {
-          url = `https://docs.google.com/presentation/d/${gslideMatch[1]}/export/pptx`;
-          name += '.pptx';
-        }
-      } catch (e) {
-        console.warn('Error converting Google Doc link', url);
-      }
-
-      // Handle Moodle module pages - these are links to pages that might contain documents
-      // We'll save them as .html files so users can browse them
-      let isMoodlePage = false;
-      if (url.includes('/mod/page/view.php') || 
-          url.includes('/mod/book/view.php') || 
-          url.includes('/mod/folder/view.php')) {
-        isMoodlePage = true;
-        if (!name.endsWith('.html')) {
-          name += '.html';
-        }
-      }
-
-      // Extract file extension from other URLs (only for direct files, not Moodle pages)
-      if (!isMoodlePage) {
-        try {
-          const urlObj = new URL(url);
-          const path = urlObj.pathname;
-          const extMatch = path.match(/\.([a-z0-9]+)$/i);
-          if (extMatch && !name.endsWith(extMatch[0])) {
-            name += extMatch[0];
-          }
-        } catch(e) {
-          console.warn('Invalid URL', url);
-        }
-      }
-
-      name = await normalizeNotebookExtension(url, name);
-
-      // Create the folder path: CourseName/SectionName/SubSectionName/[FolderModuleName]/filename
-      let folderPath = courseName;
-      if (f.sectionTitle && f.sectionTitle.trim()) {
-        folderPath += `/${f.sectionTitle}`;
-      }
-
-      // If the file was discovered inside a subsection/activity (e.g. "Vežbe 1"), add it
-      if (f.subSectionName && f.subSectionName.trim()) {
-        const cleanSub = f.subSectionName.replace(/[\/\\?%*:|"<>]/g, '_').trim().slice(0, 100);
-        folderPath += `/${cleanSub}`;
-      }
-
-      // If the file was discovered inside a folder module, place it inside that folder
-      if (f.folderName && f.folderName.trim()) {
-        const cleanFolder = f.folderName.replace(/[\/\\?%*:|"<>]/g, '_').trim().slice(0, 100);
-        folderPath += `/${cleanFolder}`;
-      }
-
-      const filename = `${folderPath}/${name}`;
-
-      // Debug: log final parameters passed to chrome.downloads.download
-      try {
-        const pathExt = (() => {
-          try { const u = new URL(url); const m = u.pathname.match(/\.([a-z0-9]+)$/i); return m ? m[0] : null; } catch(e) { return null; }
-        })();
-        console.log('DEBUG download params:', { url, filename, name, pathExt });
-      } catch (e) {
-        console.warn('DEBUG logging failed', e);
-      }
-
-      chrome.downloads.download({
-        url,
-        filename: filename
-      }, id => {
-        if (chrome.runtime.lastError) console.error('Download error', chrome.runtime.lastError);
-        else console.log('Started download', id, 'to', filename);
-      });
-    });
   }
+  if (!job) {
+    suggest();
+    return;
+  }
+  let filename = job.filename;
+  const serverBase = basename(item.filename);
+  if (job.serverName && serverBase && extOf(serverBase)) {
+    filename = job.filename.replace(/[^/]*$/, serverBase.replace(/[<>:"\\|?*\u0000-\u001f]/g, '_'));
+  } else if (job.needsExt) {
+    const serverExt = extOf(serverBase);
+    if (serverExt && extOf(filename) !== serverExt) filename += serverExt;
+  }
+  suggest({ filename, conflictAction: 'overwrite' });
+});
+
+// --- download status shared with the popup ---------------------------------
+
+let status = null;
+let statusTimer = null;
+
+function saveStatus(force) {
+  if (!status) return;
+  const write = () => {
+    statusTimer = null;
+    chrome.storage.local.set({ downloadStatus: status });
+  };
+  if (force) { clearTimeout(statusTimer); write(); }
+  else if (!statusTimer) statusTimer = setTimeout(write, 300);
+}
+
+chrome.downloads.onChanged.addListener(delta => {
+  const job = pathById.get(delta.id);
+  if (!job || !status) return;
+  // Chrome holds some file types (e.g. scripts) until the user clicks "Keep".
+  if (delta.danger && !['safe', 'accepted'].includes(delta.danger.current) && !job.held) {
+    job.held = true;
+    status.held = (status.held || 0) + 1;
+    saveStatus();
+  }
+  if (delta.state?.current === 'complete') {
+    status.completed++;
+    if (job.held) status.held--;
+    pathById.delete(delta.id);
+    saveStatus();
+  } else if (delta.state?.current === 'interrupted') {
+    status.failed.push({ filename: job.filename, url: job.url, error: delta.error?.current || 'interrupted' });
+    if (job.held) status.held--;
+    pathById.delete(delta.id);
+    saveStatus();
+  }
+});
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+// Web links are saved as tiny HTML files that redirect to the page. Unlike
+// .url/.webloc shortcuts they open on every OS and Chrome never flags them.
+function linkHtml(url, title) {
+  const u = escapeHtml(url);
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title || url)}</title>` +
+    `<meta http-equiv="refresh" content="0; url=${u}"></head>` +
+    `<body><p>Opening <a href="${u}">${u}</a>…</p></body></html>`;
+}
+
+function htmlDataUrl(html) {
+  return 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
+}
+
+async function startDownload(job) {
+  let url = job.url;
+  if (job.kind === 'link') url = htmlDataUrl(linkHtml(job.url, job.title));
+  else if (job.kind === 'page') url = htmlDataUrl(job.html || '');
+
+  const entry = { filename: job.filename, needsExt: !!job.needsExt, serverName: !!job.serverName, url: job.url };
+  if (!pendingByUrl.has(url)) pendingByUrl.set(url, []);
+  pendingByUrl.get(url).push(entry);
+
+  const options = { url, conflictAction: 'overwrite', saveAs: false };
+  // With a known name Chrome uses it directly; otherwise we fix it up in
+  // onDeterminingFilename once the server's filename (and extension) is known.
+  if (!job.needsExt) options.filename = job.filename;
+
+  try {
+    const id = await chrome.downloads.download(options);
+    if (id !== undefined) pathById.set(id, entry);
+    status.started++;
+  } catch (e) {
+    const list = pendingByUrl.get(url);
+    if (list) {
+      const i = list.indexOf(entry);
+      if (i >= 0) list.splice(i, 1);
+      if (list.length === 0) pendingByUrl.delete(url);
+    }
+    status.failed.push({ filename: job.filename, url: job.url, error: String(e && e.message || e) });
+  }
+  saveStatus();
+}
+
+async function runDownloads(jobs) {
+  status = { total: jobs.length, started: 0, completed: 0, failed: [], startedAt: Date.now(), running: true };
+  saveStatus(true);
+  for (const job of jobs) {
+    await startDownload(job);
+    await new Promise(r => setTimeout(r, START_INTERVAL_MS));
+  }
+  status.running = false;
+  saveStatus(true);
+}
+
+// --- probing external links -----------------------------------------------
+
+function filenameFromDisposition(cd) {
+  if (!cd) return null;
+  const star = cd.match(/filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/);
+  try {
+    if (star) return decodeURIComponent(star[1].trim().replace(/^"|"$/g, ''));
+    const plain = cd.match(/filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;]+)/i);
+    if (plain) return decodeURIComponent((plain[1] || plain[2]).trim());
+  } catch (e) { /* malformed header */ }
+  return null;
+}
+
+async function probe(url) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), PROBE_TIMEOUT_MS);
+  try {
+    const resp = await fetch(url, { method: 'GET', signal: ac.signal, credentials: 'omit', redirect: 'follow' });
+    const result = {
+      ok: resp.ok,
+      finalUrl: resp.url,
+      contentType: resp.headers.get('content-type') || '',
+      filename: filenameFromDisposition(resp.headers.get('content-disposition'))
+    };
+    ac.abort(); // only the headers are needed
+    return result;
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type === 'download-jobs') {
+    runDownloads(msg.jobs || []);
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (msg?.type === 'mca-probe') {
+    probe(msg.url).then(sendResponse);
+    return true; // async response
+  }
+  return false;
 });

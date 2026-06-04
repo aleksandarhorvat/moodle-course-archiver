@@ -1,75 +1,91 @@
 # Moodle Course Archiver
 
-A small Chrome extension that helps you collect files from a Moodle course so you can study offline.
+A Chrome extension that saves everything from a Moodle course for offline study, in a tidy folder structure that mirrors the course.
 
-This extension scans a course page, lists downloadable files by section, and lets you save chosen files into a folder structure on your machine.
+## What it finds
 
-## What it does
+The scanner reads the course structure and then follows every activity to the real files behind it:
 
-- Scans course sections for direct file links and common Moodle modules.
-- Extracts files inside "folder" modules and lists them individually so you can pick which ones to download.
-- Converts some Google Docs links into export URLs when possible.
-- Downloads files into a folder structure organized by course and section.
+| Where the material is | What gets saved |
+|---|---|
+| **File** resources | The actual file with its real extension (PDF, PPTX, ODP, IPYNB, ZIP, SH, MP4…), including videos embedded in a player page |
+| **Folder** modules | Every file, keeping the folder's own sub-directories (e.g. `Vežbe 2/data/input.txt`) |
+| **Announcements & forums** | Attachments and inline files from every post in every discussion (all pages), plus files linked in posts |
+| **Assignments** | Instruction files, plus your own submission and feedback files |
+| **URL** modules | Downloadable targets: Google Docs/Sheets/Slides (exported as PDF/XLSX/PPTX), Google Drive files, Colab notebooks (`.ipynb`), GitHub files, Dropbox, direct file links. Anything else is saved as a link file |
+| **Pages & books** | The content saved as a standalone `.html` file, plus everything it links to |
+| Section summaries, text labels, activity descriptions | Any files or links inside them |
+
+Links to websites, videos (YouTube, etc.), meetings and Google Drive folders are saved as small `.html` link files that open the original page, so the archive still points to them.
 
 ## Install (developer mode)
 
-1. Clone or download this repository and extract it to a local folder.
-2. Open Chrome and go to `chrome://extensions/`.
-3. Enable "Developer mode" (toggle in the top-right).
-4. Click "Load unpacked" and choose the folder with the extension files.
-
-The extension should appear in the list. You can pin it to the toolbar if you use it often.
+1. Clone or download this repository.
+2. Open `chrome://extensions/` and enable **Developer mode** (top-right).
+3. Click **Load unpacked** and choose the repository folder.
 
 ## How to use
 
-1. Open a Moodle course page in your browser.
-2. Click the extension icon. The popup will show files found on the page, grouped by section.
-3. Select the files you want and click "Download selected". You will be asked for a folder name for the course.
+1. Open any page of a Moodle course while logged in.
+2. Click the extension icon. The first time, it scans the course. You can close the popup while it runs, and the scan keeps going in the tab.
+3. Use the category chips (Files, Announcements, My submissions, Pages, Web links) and the per-section checkboxes to pick what you want.
+4. Check or edit the folder name, then click **Download**.
 
-Notes:
-- If a folder module contains files, the extension will attempt to extract those files and present them as individual items. If extraction fails, the folder may appear as a single entry and the extension will try to fall back to a background fetch.
-- For pages that require login, the extension extracts folder contents from the page context so it will work with authenticated courses.
+Scan results are cached per course. Click **Rescan** after the professor posts new material.
 
-## Supported file types
+## How files are organized
 
-Common formats are supported, including PDF, Word, PowerPoint, Excel, text and archives. Google Docs/Sheets/Slides links are converted to downloadable export URLs when possible.
+```
+Downloads/
+  Pattern Recognition and Machine Learning/
+    00 - Општа секција/
+      Announcements/
+        2026-05-11 Projekat/
+          project.pdf
+    01 - Основно о курсу/
+      Садржај предмета и начин полагања.html
+      Испитна питања.pdf
+      Литература/
+        Bishop - Pattern Recognition And Machine Learning.pdf
+    13 - Domaći zadaci 2026/
+      Prvi domaći/
+        hw1.pdf
+        My submission/
+          HM 1.zip
+```
 
-## Using this with a different Moodle site
+- Section folders are numbered so they sort in course order.
+- Moodle 5 subsections become nested folders. Short text labels used as headings (like "Vežbe 1") become sub-folders for the activities under them.
+- Files from resources are named after the activity title, with the real extension from the server. Files in folders, posts and assignments keep their original names.
+- Names are made safe for Windows, macOS and Linux. If two files would get the same name, the second becomes `name (2).ext`.
+- Downloading the same course again overwrites the earlier copies instead of creating duplicates.
 
-If you want the extension to run on a different Moodle instance, open `manifest.json` and update the `host_permissions` and `content_scripts.matches` entries to include your site URL (for example `https://your-moodle-site.example/*` and `https://your-moodle-site.example/course/view.php*`). Then reload the extension.
+All of this can be changed under **Folder & file naming** in the popup: section numbering, label sub-folders, and title vs. original file names.
+
+## Using it with other Moodle sites
+
+The extension detects Moodle automatically and works on any `https://` Moodle site. No configuration is needed. It uses Moodle's course-state service when available (Moodle 4.0+) and falls back to reading the course page, including "one section per page" layouts.
 
 ## Troubleshooting
 
-- If the extension shows "No files found", make sure the course page has finished loading and then click "Refresh list" in the popup.
-- If a file doesn't download, check Chrome's downloads page and any browser security prompts.
-- If a folder's contents aren't listed, the folder page might render dynamically; in that case the extension may need a small fallback to run extraction after rendering. Tell me if you see that and I can add it.
-
-## How downloads are organized on disk
-
-Files are saved under the course folder you provide, then grouped by section and (when applicable) by the folder module name. For example:
-
-```
-CourseName/
-   Section Name/
-      file1.pdf
-      file2.docx
-   Another Section/
-      Folder Module Name/
-         inside-file.pdf
-```
+- **Chrome asks where to save every file:** turn off *Settings → Downloads → Ask where to save each file before downloading*.
+- **A download failed:** open the popup again and expand *Show failed downloads*. Google Drive files that are private to someone else, or files above Google's virus-scan size limit, can't be downloaded directly.
+- **Something is missing:** click **Rescan**. If a file still doesn't appear, open an issue and describe how the professor posted it.
 
 ## Privacy
 
-The extension only accesses Moodle pages you open in your browser and stores course file lists locally in Chrome's storage. Files are downloaded directly to your computer; the extension does not send course content to any external servers.
-
-## Contributing
-
-If you find bugs or have ideas for improvements, open an issue or submit a pull request.
-
-## License
-
-This project is open source; see the repository license for details.
+Course pages are read in your logged-in tab. Results are stored only in Chrome's local extension storage. Files go straight from Moodle (or the linked site) to your Downloads folder. To tell downloadable files apart from web pages, the extension requests the headers of external links found in the course. No course content is sent anywhere else.
 
 ## Change log
 
-- v0.1 — Initial implementation: scans course pages, lists files, and downloads selected items.
+- **v0.2:**
+  - Rewritten scanner.
+  - Announcements/forums, assignments, pages, books, labels and section summaries are now scanned.
+  - Folder sub-directories are kept.
+  - Real file extensions come from the server.
+  - Smart handling of Google Docs/Drive/Colab/GitHub/Dropbox links, with `.html` link files for web pages.
+  - Numbered section folders, configurable naming, and duplicate-safe file names.
+  - Downloads are paced, with a progress and failure report.
+  - Works on any Moodle site without editing the manifest.
+  - Fixed: Refresh crashed on the second run, downloads went through the service worker without the login session, and all courses shared one cache entry.
+- **v0.1:** Initial implementation.
