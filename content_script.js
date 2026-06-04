@@ -3,6 +3,22 @@ const sections = Array.from(document.querySelectorAll('li[id^="section-"]'));
 let sectionsData = [];
 
 // Helper function to check if URL points to a downloadable file
+async function looksLikeIpynb(url) {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return false;
+
+    const contentType = (response.headers.get('content-type') || '').toLowerCase();
+    if (!contentType.includes('json')) return false;
+
+    const body = await response.text();
+    const parsed = JSON.parse(body);
+    return parsed && typeof parsed === 'object' && Array.isArray(parsed.cells) && parsed.nbformat != null;
+  } catch (e) {
+    return false;
+  }
+}
+
 async function checkUrlForFile(url) {
   try {
     const response = await fetch(url);
@@ -41,6 +57,10 @@ async function checkUrlForFile(url) {
           actualUrl.includes('drive.google.com') ||
           actualUrl.includes('dropbox.com') ||
           actualUrl.includes('onedrive.com')) {
+        return { isFile: true, actualUrl: actualUrl };
+      }
+
+      if (actualUrl.match(/\.json(?:$|\?)/i) && await looksLikeIpynb(actualUrl)) {
         return { isFile: true, actualUrl: actualUrl };
       }
     }

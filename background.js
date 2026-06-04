@@ -3,6 +3,30 @@ chrome.runtime.onMessage.addListener((msg) => {
     const files = msg.files || [];
     const courseName = msg.courseName || 'MyCourse';
 
+    async function looksLikeIpynb(url) {
+      try {
+        const response = await fetch(url);
+        if (!response.ok) return false;
+
+        const contentType = (response.headers.get('content-type') || '').toLowerCase();
+        if (!contentType.includes('json')) return false;
+
+        const body = await response.text();
+        const parsed = JSON.parse(body);
+        return parsed && typeof parsed === 'object' && Array.isArray(parsed.cells) && parsed.nbformat != null;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    async function normalizeNotebookExtension(url, name) {
+      if (!name || !/\.json$/i.test(name)) return name;
+      if (await looksLikeIpynb(url)) {
+        return name.replace(/\.json$/i, '.ipynb');
+      }
+      return name;
+    }
+
     files.forEach(async f => {
       // Handle folder modules (Direktorijum) differently
       if (f.isFolder) {
@@ -144,6 +168,8 @@ chrome.runtime.onMessage.addListener((msg) => {
           console.warn('Invalid URL', url);
         }
       }
+
+      name = await normalizeNotebookExtension(url, name);
 
       // Create the folder path: CourseName/SectionName/SubSectionName/[FolderModuleName]/filename
       let folderPath = courseName;
