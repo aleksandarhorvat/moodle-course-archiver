@@ -5,7 +5,7 @@ chrome.runtime.onMessage.addListener((msg) => {
 
     async function looksLikeIpynb(url) {
       try {
-        const response = await fetch(url);
+        const response = await fetch(url, { credentials: 'include' });
         if (!response.ok) return false;
 
         const body = await response.text();
@@ -55,17 +55,41 @@ chrome.runtime.onMessage.addListener((msg) => {
       }
 
       try {
-        const response = await fetch(url);
+        const response = await fetch(url, { credentials: 'include' });
+        if (!response.ok) return url;
         const html = await response.text();
 
-        const pluginFileMatch = html.match(/href="([^"]*\/pluginfile\.php[^"]*)"/i);
-        if (pluginFileMatch && pluginFileMatch[1]) {
-          return new URL(pluginFileMatch[1], url).href;
+        // Common patterns: direct pluginfile links, download=1 links, data-fileurl/data-url attrs
+        const patterns = [
+          /href="([^"]*\/pluginfile\.php[^"]*)"/i,
+          /href='([^']*\/pluginfile\.php[^']*)'/i,
+          /href="([^"]*download=1[^"]*)"/i,
+          /href='([^']*download=1[^']*)'/i,
+          /data-fileurl="([^"]+)"/i,
+          /data-fileurl='([^']+)'/i,
+          /data-url="([^"]+)"/i,
+          /data-url='([^']+)'/i,
+          /<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["']?\d+;\s*url=([^"'>]+)["']?/i,
+          /window\.location(?:\.href)?\s*=\s*['"]([^'"]+)['"]/i,
+          /location\.href\s*=\s*['"]([^'"]+)['"]/i
+        ];
+
+        for (const pat of patterns) {
+          const m = html.match(pat);
+          if (m && m[1]) {
+            try {
+              return new URL(m[1], url).href;
+            } catch (e) {
+              // fallback to raw string
+              return m[1];
+            }
+          }
         }
 
-        const downloadMatch = html.match(/href="([^"]*download=1[^"]*)"/i);
-        if (downloadMatch && downloadMatch[1]) {
-          return new URL(downloadMatch[1], url).href;
+        // As a last resort, try to find any link that contains .ipynb
+        const ipynbMatch = html.match(/href=["']([^"']+\.ipynb[^"']*)["']/i);
+        if (ipynbMatch && ipynbMatch[1]) {
+          return new URL(ipynbMatch[1], url).href;
         }
       } catch (e) {
         console.warn('Error resolving Moodle resource URL:', url, e);
