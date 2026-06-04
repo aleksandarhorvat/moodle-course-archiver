@@ -34,9 +34,15 @@ chrome.runtime.onMessage.addListener((msg) => {
         // fall through to content-based detection
       }
 
-      if (!resolvedName || !/\.json$/i.test(resolvedName)) return resolvedName;
+      if (!resolvedName) return resolvedName;
       if (await looksLikeIpynb(url)) {
-        return resolvedName.replace(/\.json$/i, '.ipynb');
+        if (/\.ipynb$/i.test(resolvedName)) {
+          return resolvedName;
+        }
+        if (/\.[^./\\]+$/i.test(resolvedName)) {
+          return resolvedName.replace(/\.[^./\\]+$/i, '.ipynb');
+        }
+        return `${resolvedName}.ipynb`;
       }
       return resolvedName;
     }
