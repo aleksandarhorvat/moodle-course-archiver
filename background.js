@@ -238,6 +238,16 @@ chrome.runtime.onMessage.addListener((msg) => {
 
       const filename = `${folderPath}/${name}`;
 
+      // Debug: log final parameters passed to chrome.downloads.download
+      try {
+        const pathExt = (() => {
+          try { const u = new URL(url); const m = u.pathname.match(/\.([a-z0-9]+)$/i); return m ? m[0] : null; } catch(e) { return null; }
+        })();
+        console.log('DEBUG download params:', { url, filename, name, pathExt });
+      } catch (e) {
+        console.warn('DEBUG logging failed', e);
+      }
+
       chrome.downloads.download({
         url,
         filename: filename
