@@ -8,9 +8,6 @@ async function looksLikeIpynb(url) {
     const response = await fetch(url);
     if (!response.ok) return false;
 
-    const contentType = (response.headers.get('content-type') || '').toLowerCase();
-    if (!contentType.includes('json')) return false;
-
     const body = await response.text();
     const parsed = JSON.parse(body);
     return parsed && typeof parsed === 'object' && Array.isArray(parsed.cells) && parsed.nbformat != null;
