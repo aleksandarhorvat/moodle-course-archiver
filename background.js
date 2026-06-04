@@ -17,11 +17,28 @@ chrome.runtime.onMessage.addListener((msg) => {
     }
 
     async function normalizeNotebookExtension(url, name) {
-      if (!name || !/\.json$/i.test(name)) return name;
-      if (await looksLikeIpynb(url)) {
-        return name.replace(/\.json$/i, '.ipynb');
+      let resolvedName = name;
+
+      try {
+        const urlObj = new URL(url);
+        const pathExtMatch = urlObj.pathname.match(/\.([a-z0-9]+)$/i);
+        if (pathExtMatch && pathExtMatch[0].toLowerCase() === '.ipynb') {
+          if (/\.json$/i.test(resolvedName)) {
+            return resolvedName.replace(/\.json$/i, '.ipynb');
+          }
+          if (!/\.ipynb$/i.test(resolvedName)) {
+            return `${resolvedName}.ipynb`;
+          }
+        }
+      } catch (e) {
+        // fall through to content-based detection
       }
-      return name;
+
+      if (!resolvedName || !/\.json$/i.test(resolvedName)) return resolvedName;
+      if (await looksLikeIpynb(url)) {
+        return resolvedName.replace(/\.json$/i, '.ipynb');
+      }
+      return resolvedName;
     }
 
     function cleanMoodleLabel(text) {
