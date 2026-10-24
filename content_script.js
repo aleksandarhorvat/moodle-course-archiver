@@ -17,8 +17,12 @@
   const MAX_PARALLEL_FETCHES = 4;
   const MAX_PAGE_DEPTH = 1; // how deep to follow page -> page links
 
-  // Hosts that serve videos/apps rather than downloadable files.
-  const LINK_ONLY_HOSTS = /(^|\.)(youtube\.com|youtu\.be|vimeo\.com|twitch\.tv|dailymotion\.com|zoom\.us|teams\.microsoft\.com|meet\.google\.com|forms\.gle|kahoot\.it|menti\.com)$/i;
+  // Hosts of live meetings, quizzes and polls: worthless once the course is over.
+  const JUNK_HOSTS = /(^|\.)(meet\.google\.com|forms\.gle|kahoot\.it|kahoot\.com|menti\.com|mentimeter\.com|slido\.com|webex\.com)$/i;
+  // Video and audio files are listed under "Videos" in the popup.
+  const MEDIA_EXT = new Set('mp4 m4v mkv mov avi wmv webm flv mpg mpeg 3gp mp3 wav m4a ogg oga flac aac wma'.split(' '));
+  // Text shorter than this makes a Moodle page a mere wrapper around its video/file.
+  const WRAPPER_PAGE_TEXT = 300;
   // Extensions trusted to be files without asking the server first.
   const FILE_EXT = new Set(('pdf doc docx odt rtf txt md tex ppt pptx pps ppsx odp key xls xlsx xlsm ods csv tsv ' +
     'zip rar 7z gz tgz tar bz2 xz png jpg jpeg gif bmp svg webp tif tiff eps ps djvu epub mobi ' +
@@ -124,7 +128,31 @@
       } else {
         ac.abort();
       }
-      return { finalUrl: resp.url, contentType, disposition, doc, ok: resp.ok };
+      return { finalUrl: resp.url, contentType, disposition, doc, ok: resp.ok, ...fileMetaFrom(resp) };
+    });
+  }
+
+  // Moodle sends a stored file's SHA-1 content hash as its ETag, so files can
+  // be compared without downloading them. The size is the fallback.
+  function fileMetaFrom(resp) {
+    const etag = (resp.headers.get('etag') || '').replace(/^W\//, '').replace(/"/g, '').trim().toLowerCase();
+    const range = (resp.headers.get('content-range') || '').match(/\/(\d+)$/);
+    const size = Number(range ? range[1] : resp.headers.get('content-length')) || 0;
+    return {
+      contentHash: /^[0-9a-f]{40}$/.test(etag) ? etag : null,
+      size: /text\/html/i.test(resp.headers.get('content-type') || '') ? 0 : size,
+      dispositionName: filenameFromDisposition(resp.headers.get('content-disposition'))
+    };
+  }
+
+  // Headers of a Moodle file; asks for a single byte so videos aren't transferred.
+  function fetchFileMeta(url) {
+    return tracked(async () => {
+      const ac = new AbortController();
+      const resp = await fetch(url, { credentials: 'include', signal: ac.signal, headers: { Range: 'bytes=0-0' } });
+      const meta = resp.ok ? fileMetaFrom(resp) : null;
+      ac.abort();
+      return meta;
     });
   }
 
@@ -189,6 +217,35 @@
     } catch (e) { return url; }
   }
 
+  // Streaming videos can't be saved as files; they're collected in an index.
+  function videoInfo(u) {
+    const host = u.hostname.replace(/^(www|m)\./, '');
+    let m;
+    if (/^(youtube\.com|youtube-nocookie\.com)$/.test(host)) {
+      const id = u.searchParams.get('v') || (u.pathname.match(/^\/(?:embed|shorts|live|v)\/([\w-]{6,})/) || [])[1];
+      if (id) return { provider: 'YouTube', id, url: `https://www.youtube.com/watch?v=${id}` };
+      const list = u.searchParams.get('list');
+      if (list) return { provider: 'YouTube', id: `list:${list}`, url: `https://www.youtube.com/playlist?list=${list}` };
+      return null;
+    }
+    if (host === 'youtu.be' && (m = u.pathname.match(/^\/([\w-]{6,})/))) return { provider: 'YouTube', id: m[1], url: `https://www.youtube.com/watch?v=${m[1]}` };
+    if ((host === 'vimeo.com' || host === 'player.vimeo.com') && (m = u.pathname.match(/\/(\d{5,})/))) return { provider: 'Vimeo', id: m[1], url: `https://vimeo.com/${m[1]}` };
+    if (/(^|\.)dailymotion\.com$/.test(host) && (m = u.pathname.match(/\/video\/([a-z0-9]+)/i))) return { provider: 'Dailymotion', id: m[1], url: u.href };
+    if (/(^|\.)loom\.com$/.test(host) && (m = u.pathname.match(/\/(?:share|embed)\/([0-9a-f]+)/))) return { provider: 'Loom', id: m[1], url: `https://www.loom.com/share/${m[1]}` };
+    if (/(^|\.)zoom\.us$/.test(host) && /^\/rec\//.test(u.pathname)) return { provider: 'Zoom recording', id: u.pathname, url: u.href };
+    if (/(^|\.)sharepoint\.com$/.test(host) && /stream\.aspx/i.test(u.pathname)) return { provider: 'Microsoft Stream', id: u.href, url: u.href };
+    if (/(^|\.)(microsoftstream\.com|panopto\.(com|eu)|kaltura\.com|twitch\.tv)$/.test(host)) return { provider: host.split('.').slice(-2, -1)[0], id: u.href, url: u.href };
+    return null;
+  }
+
+  function isJunkLink(u) {
+    if (JUNK_HOSTS.test(u.hostname)) return true;
+    if (/(^|\.)zoom\.us$/.test(u.hostname) && !/^\/rec\//.test(u.pathname)) return true; // meeting invites
+    if (/(^|\.)teams\.microsoft\.com$/.test(u.hostname)) return true;
+    if (u.hostname === 'docs.google.com' && /^\/forms\//.test(u.pathname)) return true;
+    return false;
+  }
+
   function isoDate(datetime) {
     const m = (datetime || '').match(/^(\d{4}-\d{2}-\d{2})/);
     return m ? m[1] : '';
@@ -244,7 +301,6 @@
   async function scanCourse(info) {
     const wwwroot = info.wwwroot;
     const origin = new URL(wwwroot).origin;
-    const seen = new Set();
     const visitedPages = new Set();
     let nextId = 1;
 
@@ -266,7 +322,7 @@
     }
 
     function makeItem(fields, ctx) {
-      return {
+      const item = {
         id: nextId++,
         kind: 'file',
         pre: ctx.pre || [],
@@ -274,12 +330,14 @@
         inner: ctx.inner || [],
         ...fields
       };
+      if (item.kind === 'file' && MEDIA_EXT.has((item.ext || '').slice(1)) && (!item.category || item.category === 'files')) item.category = 'videos';
+      return item;
     }
 
+    // Duplicates are removed once the whole course is known (see dedupe below),
+    // so that the copy kept is the best-placed one, not whichever loaded first.
     function add(slot, item) {
-      const key = `${item.kind}|${dedupeKey(item.url)}`;
-      if (seen.has(key)) return;
-      seen.add(key);
+      if (slot.some(it => it.kind === item.kind && dedupeKey(it.url) === dedupeKey(item.url))) return;
       slot.push(item);
       progress.found++;
       reportProgress();
@@ -326,9 +384,11 @@
       try { head = await fetchHead(url); } catch (e) { console.warn('[MCA] resource', url, e); return; }
       let fileUrl = null;
       let origName = null;
+      let meta = {};
       if (!head.doc) {
         fileUrl = head.finalUrl;
         origName = filenameFromDisposition(head.disposition) || filenameFromUrl(fileUrl);
+        meta = { contentHash: head.contentHash, size: head.size };
       } else {
         // Embedded (video player, PDF object, iframe…) or "click to open" page.
         const main = head.doc.querySelector('[role="main"], #region-main') || head.doc.body;
@@ -345,7 +405,7 @@
         console.warn('[MCA] Could not find the file behind resource', url);
         return;
       }
-      add(slot, makeItem({ source: 'resource', url: fileUrl, origName, ext: extOf(origName), title: name, useTitle: true, category: 'files' }, ctx));
+      add(slot, makeItem({ source: 'resource', url: fileUrl, origName, ext: extOf(origName), title: name, useTitle: true, category: 'files', ...meta }, ctx));
     }
 
     async function resolveUrlModule(slot, url, name, ctx) {
@@ -386,14 +446,35 @@
         doc.body;
 
       const pageTitle = name || cleanText(doc.querySelector('h2, h1')?.textContent) || 'page';
+      const found = [];
+      if (depth < MAX_PAGE_DEPTH + 1) {
+        await extractFromContent(found, content, { ...ctx, inner: [...(ctx.inner || []), pageTitle] }, source, depth + 1);
+      }
+
+      // A page that is little more than a video or a file is replaced by it:
+      // the student wants "Lecture 3.mp4", not "Lecture 3.html" plus a folder.
+      if (found.length > 0 && pageText(content).length < WRAPPER_PAGE_TEXT) {
+        if (found.length === 1) {
+          const only = found[0];
+          only.inner = only.inner.slice(0, -1);
+          only.title = pageTitle;
+          only.useTitle = true;
+        }
+        found.forEach(it => slot.push(it));
+        return;
+      }
       add(slot, makeItem({
         kind: 'page', source, url, title: pageTitle, useTitle: true, category: 'pages',
         html: buildStandaloneHtml(pageTitle, content, url)
       }, ctx));
+      found.forEach(it => slot.push(it));
+    }
 
-      if (depth < MAX_PAGE_DEPTH + 1) {
-        await extractFromContent(slot, content, { ...ctx, inner: [...(ctx.inner || []), pageTitle] }, source, depth + 1);
-      }
+    // The page's own prose, without link texts and media.
+    function pageText(el) {
+      const clone = el.cloneNode(true);
+      clone.querySelectorAll('a, script, style, iframe, video, audio, .mediaplugin, .activity-header, [data-region="activity-information"]').forEach(n => n.remove());
+      return visibleText(clone);
     }
 
     function buildStandaloneHtml(title, contentEl, sourceUrl) {
@@ -501,6 +582,13 @@ ${clone.innerHTML}
       for (const intro of intros) {
         await extractFromContent(slot, intro, { ...ctx, inner: [...(ctx.inner || []), name] }, 'module', 0);
       }
+      // Video activities (Video Time, embedded players…) keep their video in the page body.
+      const players = [];
+      await extractFromContent(players, main, ctx, 'module', 0, {
+        filter: el => el.matches('iframe, video, audio, source') && !Array.from(intros).some(i => i.contains(el))
+      });
+      if (players.length === 1) Object.assign(players[0], { title: name, useTitle: true });
+      players.forEach(it => slot.push(it));
     }
 
     // --- external/internal link classification ----------------------------
@@ -522,11 +610,11 @@ ${clone.innerHTML}
       if (host === 'drive.google.com') {
         if (/^\/drive\/(u\/\d+\/)?folders\//.test(path)) return null; // folders can't be downloaded directly
         const id = (path.match(/\/file\/d\/([^/]+)/) || [])[1] || u.searchParams.get('id');
-        if (id) return { url: `https://drive.google.com/uc?export=download&id=${id}`, ext: '' };
+        if (id) return { url: `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t`, ext: '' };
         return null;
       }
       if (host === 'colab.research.google.com') {
-        if ((m = path.match(/^\/drive\/([^/?#]+)/))) return { url: `https://drive.google.com/uc?export=download&id=${m[1]}`, ext: '.ipynb' };
+        if ((m = path.match(/^\/drive\/([^/?#]+)/))) return { url: `https://drive.usercontent.google.com/download?id=${m[1]}&export=download&confirm=t`, ext: '.ipynb' };
         if ((m = path.match(/^\/github\/([^/]+)\/([^/]+)\/blob\/(.+)$/))) return { url: `https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[3]}`, ext: '.ipynb' };
       }
       return null;
@@ -556,6 +644,14 @@ ${clone.innerHTML}
             if (chrome.runtime.lastError) resolve(null);
             else resolve(r || null);
           });
+        } catch (e) { resolve(null); }
+      }));
+    }
+
+    function videoTitle(url) {
+      return tracked(() => new Promise(resolve => {
+        try {
+          chrome.runtime.sendMessage({ type: 'mca-oembed', url }, r => resolve(chrome.runtime.lastError ? null : (r && r.title) || null));
         } catch (e) { resolve(null); }
       }));
     }
@@ -626,11 +722,19 @@ ${clone.innerHTML}
         return; // other Moodle links (profiles, navigation…) are not course material
       }
 
-      const display = title || linkTitle('', url);
-      if (LINK_ONLY_HOSTS.test(u.hostname)) {
-        add(slot, makeItem({ kind: 'link', source, url, title: display, useTitle: true, category: 'links' }, ctx));
+      if (isJunkLink(u)) return;
+      const video = videoInfo(u);
+      if (video) {
+        let vTitle = !autoTitle || fromUrlModule ? title : null;
+        if (!vTitle && /^(YouTube|Vimeo)$/.test(video.provider)) vTitle = await videoTitle(video.url);
+        add(slot, makeItem({
+          kind: 'link', source, url: video.url, title: vTitle || title || `${video.provider} video`, useTitle: true,
+          category: category === 'forum' ? 'forum' : 'videos', video: { provider: video.provider, id: video.id }
+        }, ctx));
         return;
       }
+
+      const display = title || linkTitle('', url);
 
       const g = googleExport(u);
       if (g) {
@@ -679,7 +783,9 @@ ${clone.innerHTML}
         jobs.push({ sub, run: addTarget(sub, abs, linkTitle(text, abs), ctx, source, depth, false, opts.category) });
       };
       root.querySelectorAll('a[href]').forEach(a => consider(a, a.getAttribute('href'), visibleText(a) || a.getAttribute('title'), false));
-      root.querySelectorAll('img[src], video[src], audio[src], source[src], embed[src], iframe[src]').forEach(e => consider(e, e.getAttribute('src'), e.getAttribute('alt') || e.getAttribute('title') || '', e.tagName !== 'IFRAME'));
+      // Inline images are decoration (banners, icons, formulas) except in announcements.
+      const embeds = opts.category === 'forum' ? 'img[src], video[src], audio[src], source[src], embed[src], iframe[src]' : 'video[src], audio[src], source[src], embed[src], iframe[src]';
+      root.querySelectorAll(embeds).forEach(e => consider(e, e.getAttribute('src'), e.getAttribute('alt') || e.getAttribute('title') || e.closest('video, audio')?.getAttribute('title') || '', e.tagName !== 'IFRAME'));
       root.querySelectorAll('object[data]').forEach(o => consider(o, o.getAttribute('data'), '', true));
       await Promise.all(jobs.map(j => j.run.catch(e => console.warn('[MCA] link failed', e))));
       jobs.forEach(j => j.sub.forEach(it => slot.push(it)));
@@ -850,15 +956,85 @@ ${clone.innerHTML}
     reportProgress(true);
     await Promise.all(tasks.map(t => t().catch(e => console.warn('[MCA] task failed', e))));
 
+    const duplicates = await dedupe(sections);
+
     return {
       courseId: info.courseId,
       courseName,
       courseUrl,
       wwwroot,
       scannedAt: Date.now(),
+      duplicates,
       sections: sections
         .map(s => ({ number: s.number, title: s.title, items: s.slots.flat() }))
     };
+  }
+
+  // --- duplicates --------------------------------------------------------------
+
+  // Where a copy sits says how well it fits the course's organisation:
+  // a file posted as a resource in its week beats the same file attached to
+  // an announcement or linked from a description.
+  const SOURCE_RANK = { resource: 0, folder: 1, url: 1, page: 2, book: 2, label: 2, module: 3, summary: 3, description: 3, assign: 4, forum: 5 };
+
+  function contentKey(item) {
+    const prefix = item.category === 'submissions' ? 'mine|' : ''; // own work is never merged with course material
+    if (item.video) return `${prefix}video|${item.video.provider}|${item.video.id}`;
+    if (item.contentHash) return `${prefix}hash|${item.contentHash}`;
+    if (item.size > 0 && item.origName) return `${prefix}size|${item.size}|${item.origName.toLowerCase()}`;
+    return `${prefix}${item.kind === 'page' ? 'page' : 'url'}|${dedupeKey(item.url)}`;
+  }
+
+  function locationOf(section, item) {
+    return [section.title, ...item.pre, item.group, ...item.inner].filter(Boolean).join(' / ');
+  }
+
+  // Removes every copy of the same material but the best-placed one and
+  // returns how many were removed.
+  async function dedupe(sections) {
+    const all = [];
+    sections.forEach(section => section.slots.flat().forEach(item => all.push({ section, item })));
+
+    progress.phase = 'Checking for duplicate files';
+    reportProgress(true);
+    const metaByUrl = new Map();
+    for (const { item } of all) {
+      if (item.kind !== 'file' || item.contentHash || !item.url.startsWith(origin) || !/\/pluginfile\.php\//.test(item.url)) continue;
+      const key = dedupeKey(item.url);
+      if (!metaByUrl.has(key)) metaByUrl.set(key, fetchFileMeta(item.url).catch(() => null));
+    }
+    for (const { item } of all) {
+      const meta = metaByUrl.has(dedupeKey(item.url)) ? await metaByUrl.get(dedupeKey(item.url)) : null;
+      if (!meta) continue;
+      item.contentHash = meta.contentHash;
+      item.size = meta.size;
+      // Embedded files sometimes have a generic URL name; the server knows better.
+      if (meta.dispositionName && !item.useTitle && extOf(meta.dispositionName)) {
+        item.origName = meta.dispositionName;
+        item.ext = extOf(meta.dispositionName);
+      }
+    }
+
+    const groups = new Map();
+    all.forEach((entry, order) => {
+      const key = contentKey(entry.item);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push({ ...entry, order });
+    });
+    const drop = new Set();
+    for (const copies of groups.values()) {
+      if (copies.length < 2) continue;
+      const rank = c => (c.item.category === 'forum' ? 5 : SOURCE_RANK[c.item.source] ?? 3);
+      copies.sort((a, b) => rank(a) - rank(b) || a.order - b.order);
+      const [keep, ...rest] = copies;
+      keep.item.alsoIn = rest.map(c => locationOf(c.section, c.item));
+      rest.forEach(c => drop.add(c.item));
+    }
+    for (const section of sections) {
+      section.slots = section.slots.map(slot => slot.filter(item => !drop.has(item)));
+    }
+    progress.found = all.length - drop.size;
+    return drop.size;
   }
 
   async function startScan() {
