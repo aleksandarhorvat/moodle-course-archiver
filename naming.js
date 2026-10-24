@@ -23,7 +23,9 @@ function mcaSafeSegment(raw, fallback = '_') {
   let s = String(raw || '')
     .normalize('NFC')
     .replace(/[\u0000-\u001f\u007f]/g, '')
-    .replace(/[<>:"/\\|?*]/g, '_')
+    .replace(/\s*:\s+/g, ' - ')    // "Course: Topic" -> "Course - Topic"
+    .replace(/[/\\]/g, '-')        // "2025/26" -> "2025-26"
+    .replace(/[<>:"|?*]/g, '_')
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^[.\s]+/, '')     // no hidden / dot-leading names

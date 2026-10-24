@@ -29,7 +29,7 @@ Links to websites, videos (YouTube, etc.), meetings and Google Drive folders are
 1. Open any page of a Moodle course while logged in.
 2. Click the extension icon. The first time, it scans the course. You can close the popup while it runs, and the scan keeps going in the tab.
 3. Use the category chips (Files, Announcements, My submissions, Pages, Web links) and the per-section checkboxes to pick what you want.
-4. Check or edit the folder name, then click **Download**.
+4. Check or edit the folder name, then click **Download**. It starts as the course's name on Moodle. A name you type is remembered for that course, and clearing the field brings back the course name.
 
 Scan results are cached per course. Click **Rescan** after the professor posts new material.
 
@@ -57,7 +57,7 @@ Downloads/
 - Section folders are numbered so they sort in course order.
 - Moodle 5 subsections become nested folders. Short text labels used as headings (like "Vežbe 1") become sub-folders for the activities under them.
 - Files from resources are named after the activity title, with the real extension from the server. Files in folders, posts and assignments keep their original names.
-- Names are made safe for Windows, macOS and Linux. If two files would get the same name, the second becomes `name (2).ext`.
+- Names are made safe for Windows, macOS and Linux (`Course: Topic 2025/26` becomes `Course - Topic 2025-26`). If two files would get the same name, the second becomes `name (2).ext`.
 - Downloading the same course again overwrites the earlier copies instead of creating duplicates.
 
 All of this can be changed under **Folder & file naming** in the popup: section numbering, label sub-folders, and title vs. original file names.

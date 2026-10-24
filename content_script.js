@@ -224,6 +224,23 @@
   // Scanner
   // ---------------------------------------------------------------------------
 
+  // The course's name as shown on its Moodle page (the course page heading).
+  function courseNameFromDoc(doc, courseId) {
+    return cleanText(
+      doc.querySelector('.page-header-headings h1, #page-header h1, header h1')?.textContent ||
+      (doc.title || '').split('|')[0]
+    ) || `Course ${courseId}`;
+  }
+
+  // Works from any page of the course: activity pages have their own heading,
+  // so anything other than the course page itself fetches the course page.
+  async function getCourseName(info) {
+    const onCoursePage = location.pathname.endsWith('/course/view.php') &&
+      new URLSearchParams(location.search).get('id') === String(info.courseId);
+    const doc = onCoursePage ? document : await fetchDoc(`${info.wwwroot}/course/view.php?id=${info.courseId}`);
+    return courseNameFromDoc(doc, info.courseId);
+  }
+
   async function scanCourse(info) {
     const wwwroot = info.wwwroot;
     const origin = new URL(wwwroot).origin;
@@ -235,10 +252,7 @@
     const courseDoc = await fetchDoc(courseUrl);
     const state = await getCourseState(info);
 
-    const courseName = cleanText(
-      courseDoc.querySelector('.page-header-headings h1, #page-header h1, header h1')?.textContent ||
-      (courseDoc.title || '').split('|')[0]
-    ) || `Course ${info.courseId}`;
+    const courseName = courseNameFromDoc(courseDoc, info.courseId);
 
     const stateCms = new Map((state?.cm || []).map(c => [String(c.id), c]));
     const stateSections = new Map((state?.section || []).map(s => [String(s.id), s]));
@@ -874,6 +888,11 @@ ${clone.innerHTML}
       const info = pageInfo();
       sendResponse({ started: info.isCourse && !scanning, scanning: true });
       startScan();
+    } else if (msg?.type === 'mca-course-name') {
+      const info = pageInfo();
+      if (!info.isCourse) { sendResponse({ name: null }); return; }
+      getCourseName(info).then(name => sendResponse({ name }), () => sendResponse({ name: null }));
+      return true; // answered asynchronously
     }
   });
 })();
