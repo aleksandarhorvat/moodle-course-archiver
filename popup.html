@@ -4,99 +4,114 @@
     <meta charset="utf-8" />
     <title>Moodle Course Archiver</title>
     <style>
-      /* Moodle-like light theme with dark fallback */
-      :root{
+      :root {
         --bg: #ffffff;
         --panel: #fbfbfb;
         --text: #212121;
         --muted: #5a5a5a;
-        --accent: #f9810a; /* Moodle orange chosen by user */
-        --button-border: rgba(0,0,0,0.08);
+        --faint: #8a8a8a;
+        --accent: #f9810a;
+        --accent-soft: rgba(249,129,10,0.10);
+        --border: rgba(0,0,0,0.09);
         --button-bg: #ffffff;
-        --button-hover: #fffaf6;
+        --button-hover: #fff5ec;
         --shadow: rgba(0,0,0,0.06);
+        --danger: #c62828;
       }
-
-      /* Dark theme overrides */
       .dark {
         --bg: #0f1112;
-        --panel: #111314;
+        --panel: #15171a;
         --text: #e6e6e6;
-        --muted: #bfcfc1;
+        --muted: #b4b8bc;
+        --faint: #7d8389;
         --accent: #f9810a;
-        --button-border: rgba(255,255,255,0.06);
-        --button-bg: #141516;
-        --button-hover: rgba(255,255,255,0.03);
-        --shadow: rgba(0,0,0,0.6);
+        --accent-soft: rgba(249,129,10,0.16);
+        --border: rgba(255,255,255,0.08);
+        --button-bg: #1a1c1f;
+        --button-hover: rgba(255,255,255,0.05);
+        --shadow: rgba(0,0,0,0.5);
+        --danger: #ef6c6c;
       }
 
-      html, body { margin:0; }
-      body { font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; width: 400px; padding: 12px; background: var(--bg); color: var(--text); }
-      .header { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
-      .brand { display:flex; align-items:center; gap:10px; }
-      .logo { width:36px; height:36px; border-radius:6px; box-shadow: 0 2px 6px var(--shadow); }
-      h3 { margin:0; font-size:15px; font-weight:600; }
-      .theme-control { display:flex; align-items:center; gap:8px; }
-      .theme-label { font-size:12px; color:var(--muted); }
+      html, body { margin: 0; }
+      body { font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; width: 440px; padding: 12px; background: var(--bg); color: var(--text); font-size: 13px; }
+      .header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+      .brand { display: flex; align-items: center; gap: 10px; }
+      .logo { width: 32px; height: 32px; border-radius: 6px; box-shadow: 0 2px 6px var(--shadow); }
+      h3 { margin: 0; font-size: 15px; font-weight: 600; }
+      .theme-control { display: flex; align-items: center; gap: 8px; }
+      .theme-label { font-size: 12px; color: var(--muted); }
 
-      #files { max-height: 320px; overflow:auto; border:1px solid rgba(0,0,0,0.04); padding:10px; background: var(--panel); border-radius:10px; box-shadow: 0 4px 12px var(--shadow); }
-      .section { 
-        margin-top: 8px; 
-        margin-bottom: 6px; 
-        padding: 8px; 
-        background-color: transparent; 
-        border-radius: 6px; 
-        font-size: 13px; 
-        font-weight: 600;
-        border-left: 4px solid var(--accent);
-        color: var(--text);
-      }
-      .section:first-child { margin-top: 0; }
-      .file { 
-        display: flex; 
-        align-items: center; 
-        margin-bottom: 8px; 
-        margin-left: 12px;
-        padding: 6px 8px;
-        border-radius: 6px;
-      }
-      .file input { margin-right: 10px; accent-color: var(--accent); width:16px; height:16px; }
-      .file label { 
-        font-size: 13px; 
-        color: var(--muted); 
-        cursor: pointer;
-        flex: 1;
-        word-wrap: break-word;
-      }
-      .file:hover { background-color: rgba(249,129,10,0.04); }
+      .card { border: 1px solid var(--border); background: var(--panel); border-radius: 10px; padding: 10px; margin-bottom: 8px; }
+      .row { display: flex; align-items: center; gap: 8px; }
+      .grow { flex: 1; min-width: 0; }
+      .course-name { width: 100%; box-sizing: border-box; font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+      .field-label { font-size: 11px; color: var(--muted); margin-bottom: 4px; display: block; }
+      .status { font-size: 12px; color: var(--muted); margin-top: 6px; }
+      .status.error { color: var(--danger); }
 
-      .controls { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:10px; }
-  button { margin-top: 8px; margin-right: 5px; background: var(--button-bg); color: var(--text); border: 1px solid var(--button-border); padding:8px 10px; border-radius:8px; cursor:pointer; box-shadow: 0 2px 6px var(--shadow); }
-      #download { background: var(--accent); color: #fff; border: none; }
-      .select-buttons { margin-bottom: 8px; display:flex; gap:8px; }
-  .select-buttons button { font-size: 13px; padding: 6px 10px; background: var(--button-bg); border: 1px solid var(--button-border); color: var(--text); cursor: pointer; border-radius:8px; }
-  .select-buttons button:hover { background: var(--button-hover); }
+      .progress { height: 6px; border-radius: 4px; background: var(--border); overflow: hidden; margin-top: 8px; }
+      .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
 
-      /* Toggle switch */
-      .switch { position: relative; display: inline-block; width:44px; height:24px; }
-      .switch input { display:none; }
-      .slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#ddd; border-radius:24px; transition:.2s; box-shadow: inset 0 1px 2px rgba(0,0,0,0.06); }
-      .slider:before { content:''; position:absolute; height:18px; width:18px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; box-shadow:0 2px 4px rgba(0,0,0,0.12); }
-      input:checked + .slider { background: var(--accent); }
-      input:checked + .slider:before { transform: translateX(20px); }
+      .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+      .chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--border); background: var(--button-bg); cursor: pointer; user-select: none; font-size: 12px; color: var(--muted); }
+      .chip input { display: none; }
+      .chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+      .chip .n { font-variant-numeric: tabular-nums; color: var(--faint); }
 
-      label { user-select: none; }
-      input[type="checkbox"] { width: 16px; height:16px; accent-color: var(--accent); }
+      details.options { margin-bottom: 8px; }
+      details.options summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+      .options-body { padding: 8px 2px 2px; display: grid; gap: 6px; }
+      .options-body label { display: flex; gap: 8px; align-items: center; }
+      .options-body select { font: inherit; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+      .hint { color: var(--faint); font-size: 11px; }
+
+      #files { max-height: 330px; overflow: auto; border: 1px solid var(--border); padding: 6px; background: var(--panel); border-radius: 10px; }
+      .empty { padding: 14px; color: var(--muted); text-align: center; }
+      .section { margin: 2px 0 4px; }
+      .section-head { display: flex; align-items: center; gap: 6px; padding: 6px; border-radius: 6px; border-left: 4px solid var(--accent); font-weight: 600; cursor: pointer; user-select: none; }
+      .section-head:hover { background: var(--button-hover); }
+      .section-head .chev { width: 12px; color: var(--faint); transition: transform .15s; display: inline-block; }
+      .section.collapsed .chev { transform: rotate(-90deg); }
+      .section.collapsed .section-items { display: none; }
+      .section-head .count { margin-left: auto; color: var(--faint); font-weight: 400; font-size: 12px; }
+      .section-items { margin-left: 14px; }
+      .file { display: flex; align-items: flex-start; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+      .file:hover { background: var(--accent-soft); }
+      .file .icon { width: 18px; text-align: center; flex: none; }
+      .file .names { min-width: 0; flex: 1; }
+      .file .name { color: var(--text); word-break: break-word; }
+      .file .where { color: var(--faint); font-size: 11px; word-break: break-word; }
+      .file .size { color: var(--faint); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; padding-top: 2px; }
+      input[type="checkbox"] { width: 15px; height: 15px; margin: 1px 0 0; accent-color: var(--accent); flex: none; }
+
+      .controls { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 10px; }
+      button { background: var(--button-bg); color: var(--text); border: 1px solid var(--border); padding: 7px 10px; border-radius: 8px; cursor: pointer; font: inherit; }
+      button:hover:not(:disabled) { background: var(--button-hover); }
+      button:disabled { opacity: .5; cursor: default; }
+      #download { background: var(--accent); color: #fff; border: none; font-weight: 600; }
+      #download:hover:not(:disabled) { filter: brightness(1.05); background: var(--accent); }
+      .small { font-size: 12px; padding: 5px 9px; }
+
+      .switch { position: relative; display: inline-block; width: 40px; height: 22px; }
+      .switch input { display: none; }
+      .slider { position: absolute; cursor: pointer; inset: 0; background: #ccc; border-radius: 22px; transition: .2s; }
+      .slider:before { content: ''; position: absolute; height: 16px; width: 16px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s; }
+      .switch input:checked + .slider { background: var(--accent); }
+      .switch input:checked + .slider:before { transform: translateX(18px); }
+      #dl-status { margin-top: 8px; font-size: 12px; color: var(--muted); }
+      #dl-status details { margin-top: 4px; }
+      #dl-status li { word-break: break-all; color: var(--danger); }
     </style>
   </head>
   <body>
     <div class="header">
       <div class="brand">
-        <img src="icon.png" alt="logo" class="logo" />
+        <img src="icon.png" alt="" class="logo" />
         <h3>Moodle Course Archiver</h3>
       </div>
       <div class="theme-control">
-        <label class="theme-label">Theme</label>
+        <span class="theme-label">Dark</span>
         <label class="switch">
           <input type="checkbox" id="theme-toggle" />
           <span class="slider"></span>
@@ -104,22 +119,45 @@
       </div>
     </div>
 
-    <div class="select-buttons">
-      <button id="select-all">Select all</button>
-      <button id="select-none">Select none</button>
+    <div class="card">
+      <label class="field-label" for="course-name">Save to Downloads /</label>
+      <div class="row">
+        <input id="course-name" class="course-name grow" placeholder="Course folder name" />
+        <button id="rescan" class="small" title="Scan the course again">Rescan</button>
+      </div>
+      <div id="scan-status" class="status">Checking page…</div>
+      <div id="progress" class="progress" hidden><div></div></div>
     </div>
 
-    <div id="files">Scanning page...</div>
+    <div id="chips" class="chips"></div>
+
+    <details class="options">
+      <summary>Options: naming &amp; duplicates</summary>
+      <div class="options-body">
+        <label><input type="checkbox" id="opt-number" /> Number section folders <span class="hint">(01 - Lectures, 02 - …)</span></label>
+        <label><input type="checkbox" id="opt-labels" /> Use text labels as sub-folders</label>
+        <label>Name files by
+          <select id="opt-names">
+            <option value="title">activity title (keeps real extension)</option>
+            <option value="original">original file name</option>
+          </select>
+        </label>
+        <label><input type="checkbox" id="opt-dupes" /> Show duplicate copies <span class="hint">(same file posted in several places)</span></label>
+      </div>
+    </details>
+
+    <div id="files"><div class="empty">Scanning page…</div></div>
 
     <div class="controls">
-      <div>
-        <button id="refresh">Refresh list</button>
+      <div class="row">
+        <button id="select-all" class="small">Select all</button>
+        <button id="select-none" class="small">Select none</button>
       </div>
-      <div>
-        <button id="download" disabled>Download selected</button>
-      </div>
+      <button id="download" disabled>Download</button>
     </div>
+    <div id="dl-status"></div>
 
+    <script src="naming.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>
