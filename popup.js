@@ -119,10 +119,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   const scanKey = `scan:${info.key}`;
   const progressKey = `progress:${info.key}`;
 
+  // The folder defaults to the course's name on Moodle. A name typed by the
+  // user is remembered per course; clearing the field goes back to the default.
+  let defaultCourseFolder = '';
+  function setDefaultCourseFolder(name) {
+    if (!name) return;
+    defaultCourseFolder = mcaSafeFolder(name, 'Course');
+    courseInput.placeholder = defaultCourseFolder;
+    if (!courseFolders[info.key]) courseInput.value = defaultCourseFolder;
+  }
+  courseInput.value = courseFolders[info.key] || '';
+  chrome.tabs.sendMessage(tab.id, { type: 'mca-course-name' })
+    .then(r => { setDefaultCourseFolder(r && r.name); render(); })
+    .catch(() => {});
+
   courseInput.addEventListener('input', () => {
-    courseFolders[info.key] = courseInput.value;
+    const value = courseInput.value.trim();
+    if (!value || value === defaultCourseFolder) delete courseFolders[info.key];
+    else courseFolders[info.key] = courseInput.value;
     chrome.storage.local.set({ courseFolders });
     render();
+  });
+  courseInput.addEventListener('blur', () => {
+    if (!courseInput.value.trim()) courseInput.value = defaultCourseFolder;
   });
 
   function startScan() {
@@ -167,7 +186,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     selected.clear();
     if (scan) {
       scan.sections.forEach(sec => sec.items.forEach(it => selected.add(it.id)));
-      courseInput.value = courseFolders[info.key] || mcaSafeFolder(scan.courseName, 'Course');
+      if (!defaultCourseFolder) setDefaultCourseFolder(scan.courseName);
       const items = scan.sections.flatMap(sec => sec.items);
       const dupes = items.filter(it => it.duplicateOf).length;
       scanStatus.textContent = `Scanned ${timeAgo(scan.scannedAt)} · ${items.length - dupes} items` +
@@ -211,7 +230,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function currentOpts() {
     return {
-      courseFolder: courseInput.value,
+      courseFolder: courseInput.value.trim() || defaultCourseFolder,
       numberSections: prefs.numberSections,
       labelFolders: prefs.labelFolders,
       originalNames: prefs.fileNames === 'original',
