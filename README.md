@@ -57,7 +57,7 @@ Every external link is checked with the server before it's listed. If it answers
   - Live-meeting join links (Webex, Zoom, Teams, Meet). Their *recordings* are kept.
   - Scheduling polls and forms (When2meet, Doodle, Google Forms…), help pages and social-media profiles.
   - Small decorative images pasted into posts (under 15 KB).
-- **Off by default:** links to websites and YouTube videos ("Web links" chip). If you turn them on, they're saved as small `.html` files that open the page.
+- **Off by default:** links to websites, plus YouTube channels and profiles ("Web links" chip). If you turn them on, they're saved as small `.html` files that open the page. YouTube and other online *videos* are not links: they're under **Videos & audio** and downloaded with the yt-dlp script.
 
 ### Duplicate materials
 
@@ -76,6 +76,8 @@ Turn on **Show duplicate copies** in the options if you want a copy in every pla
 2. Open `chrome://extensions/` and enable **Developer mode** (top-right).
 3. Click **Load unpacked** and choose the repository folder.
 
+It works the same way in Microsoft Edge (`edge://extensions/`).
+
 ## How to use
 
 1. Open any page of a Moodle course while logged in.
@@ -90,20 +92,24 @@ Scan results are cached per course. Click **Rescan** after the professor posts n
 ```
 Downloads/
   Pattern Recognition and Machine Learning/
-    00 - Општа секција/
-      Announcements/
-        2026-05-11 Projekat/
-          project.pdf
     01 - Основно о курсу/
       Садржај предмета и начин полагања.html
       Испитна питања.pdf
       Литература/
-        Bishop - Pattern Recognition And Machine Learning.pdf
+        Bishop - Pattern Recognition And Machine Learning - Springer 2006.pdf
     13 - Domaći zadaci 2026/
       Prvi domaći/
         hw1.pdf
         My submission/
           HM 1.zip
+  Временске серије-Time series/
+    Download videos (yt-dlp).cmd            ← only when online videos were picked
+    00 - Општа секција/
+      Obaveštenja/
+        2023-02-20 Материјал/
+          VS.zip                            ← the files picked from the Nextcloud share
+        2023-09-16 Резултати - октобар/
+          rezVSokt2023.pdf                  ← attachment of an announcement
 ```
 
 - Section folders are numbered so they sort in course order.
@@ -112,7 +118,7 @@ Downloads/
 - Names are made safe for Windows, macOS and Linux: `Course: Topic` becomes `Course - Topic`, `2025/26` becomes `2025-26`. If two files would get the same name, the second becomes `name (2).ext`.
 - Downloading the same course again overwrites the earlier copies instead of creating duplicates.
 
-All of this can be changed under **Options** in the popup: section numbering, label sub-folders, title vs. original file names, and showing duplicate copies.
+All of this can be changed under **Options** in the popup: section numbering, label sub-folders, title vs. original file names, showing duplicate copies, and packing cloud folders into one zip.
 
 ## Using it with other Moodle sites
 
@@ -129,13 +135,17 @@ The extension detects Moodle automatically and works on any `https://` Moodle si
 
 ## Privacy
 
-Course pages are read in your logged-in tab. Results are stored only in Chrome's local extension storage. Files go straight from Moodle (or the linked site) to your Downloads folder. To tell downloadable files apart from web pages and to show sizes, the extension asks external links in the course for their first byte (headers only). To detect duplicates, it reads small Moodle files that have the same size and compares their hashes locally. To resolve web links, it reads the linked page, the Drive/SharePoint/Nextcloud folder listing, or YouTube's/Vimeo's public oEmbed info (video title). No course content is sent anywhere else.
+Course pages are read in your logged-in tab. Results are stored only in Chrome's local extension storage. Files go straight from Moodle (or the linked site) to your Downloads folder. To tell downloadable files apart from web pages and to show sizes, the extension asks external links in the course for their first byte (headers only). To detect duplicates, it reads small Moodle files that have the same size and compares their hashes locally. To resolve web links, it reads the linked page, the Drive/SharePoint/Nextcloud folder listing, or YouTube's/Vimeo's public oEmbed info (video title). Zips of cloud folders are built on your computer (Nextcloud builds its own). Google refuses requests that come from an extension, so for the extension's own requests to Google Drive and Docs it removes the `Origin` header. This rule never touches requests made by your tabs. No course content is sent anywhere else.
 
 ## Change log
 
 - **v0.5:**
   - Cloud folders (Drive, SharePoint, Nextcloud) are listed file by file, and the files you pick are packed into one zip per folder.
+  - Nextcloud zips the selection on the server and streams it straight to disk. Drive and SharePoint zips are built locally.
   - Nextcloud folders are listed instead of downloaded blindly as one big zip.
+  - The yt-dlp script finds yt-dlp even when it was installed after you logged in, and saves videos as MP4 (up to 1080p).
+  - The folder name starts as the course's Moodle name as soon as the popup opens, and clearing it restores that name.
+  - Nicer names: `Course: Topic` → `Course - Topic`, `2025/26` → `2025-26`.
 
 - **v0.4:**
   - Web links are turned into downloads where possible: YouTube/Vimeo videos (via a generated yt-dlp script), Google Drive folders, SharePoint/OneDrive folders, Nextcloud shares, Binder repositories, paper PDFs, and pages that are just file lists.
