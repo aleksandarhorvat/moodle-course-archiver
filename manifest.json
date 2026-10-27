@@ -2,14 +2,16 @@
   "manifest_version": 3,
   "name": "Moodle Course Archiver",
   "description": "Save every file from a Moodle course - resources, folders, announcements, assignments and links - in a tidy folder structure.",
-  "version": "0.3",
+  "version": "0.5",
 
   "permissions": [
     "downloads",
     "storage",
     "unlimitedStorage",
     "scripting",
-    "activeTab"
+    "activeTab",
+    "offscreen",
+    "declarativeNetRequest"
   ],
 
   "host_permissions": [

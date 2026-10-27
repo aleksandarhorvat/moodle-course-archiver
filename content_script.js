@@ -559,11 +559,11 @@ ${clone.innerHTML}
       if (host === 'drive.google.com') {
         if (/^\/drive\/(u\/\d+\/)?folders\//.test(path)) return null; // folders can't be downloaded directly
         const id = (path.match(/\/file\/d\/([^/]+)/) || [])[1] || u.searchParams.get('id');
-        if (id) return { url: `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t`, ext: '' };
+        if (id) return { url: `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t`, ext: '', driveId: id };
         return null;
       }
       if (host === 'colab.research.google.com') {
-        if ((m = path.match(/^\/drive\/([^/?#]+)/))) return { url: `https://drive.usercontent.google.com/download?id=${m[1]}&export=download&confirm=t`, ext: '.ipynb' };
+        if ((m = path.match(/^\/drive\/([^/?#]+)/))) return { url: `https://drive.usercontent.google.com/download?id=${m[1]}&export=download&confirm=t`, ext: '.ipynb', driveId: m[1] };
         if ((m = path.match(/^\/github\/([^/]+)\/([^/]+)\/blob\/(.+)$/))) return { url: `https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[3]}`, ext: '.ipynb' };
       }
       return null;
@@ -586,15 +586,278 @@ ${clone.innerHTML}
       return null;
     }
 
-    function probeExternal(url) {
+    // Cross-origin requests go through the background worker (no CORS there).
+    function askBackground(message) {
       return tracked(() => new Promise(resolve => {
         try {
-          chrome.runtime.sendMessage({ type: 'mca-probe', url }, r => {
+          chrome.runtime.sendMessage(message, r => {
             if (chrome.runtime.lastError) resolve(null);
             else resolve(r || null);
           });
         } catch (e) { resolve(null); }
       }));
+    }
+    const probeExternal = url => askBackground({ type: 'mca-probe', url });
+    const fetchExternalText = url => askBackground({ type: 'mca-fetch-text', url });
+
+    // Google's download endpoints refuse fetch() requests that carry an Origin
+    // header (every extension request does), so a Drive file is checked through
+    // its view page instead: it names the file, gives its size and shows whether
+    // downloading is allowed. The download itself (no Origin) works normally.
+    async function driveProbe(id) {
+      const r = await fetchExternalText(`https://drive.google.com/file/d/${id}/view`);
+      if (!r) return null;
+      const noAccess = { ok: false, contentType: 'text/html' };
+      if (!r.ok || !r.text) return noAccess;
+      const doc = parser.parseFromString(r.text, 'text/html');
+      const filename = cleanText(doc.querySelector('meta[property="og:title"]')?.content);
+      if (!filename || !r.text.includes('drive.usercontent.google.com/uc?id')) return noAccess; // private or download disabled
+      const size = (r.text.match(/\[null,null,"(\d+)"\]/) || [])[1];
+      return { ok: true, contentType: 'application/octet-stream', filename, size: size ? Number(size) : null };
+    }
+    const probeFile = (url, g) => (g?.driveId ? driveProbe(g.driveId) : probeExternal(url));
+
+    // --- web links that lead to downloadable material ----------------------
+
+    // Videos on streaming sites. They are saved by yt-dlp (the popup writes a
+    // script for it), named after the real video title when it can be read.
+    function videoStream(u) {
+      const host = u.hostname.replace(/^(www|m)\./, '');
+      const p = u.pathname;
+      let id = null;
+      let m;
+      if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+        if (p === '/watch') id = u.searchParams.get('v');
+        else if ((m = p.match(/^\/(?:embed|shorts|live|v)\/([\w-]{6,})/))) id = m[1];
+        else if (p === '/playlist' && u.searchParams.get('list')) {
+          const list = `https://www.youtube.com/playlist?list=${u.searchParams.get('list')}`;
+          return { provider: 'YouTube', playlist: true, url: list, page: u.href, oembed: null };
+        }
+      } else if (host === 'youtu.be') {
+        id = p.slice(1).split('/')[0] || null;
+      }
+      if (id) {
+        const watch = `https://www.youtube.com/watch?v=${id}`;
+        return { provider: 'YouTube', playlist: false, url: watch, page: u.href, oembed: `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(watch)}` };
+      }
+      if ((host === 'vimeo.com' && (m = p.match(/^\/(\d+)/))) || (host === 'player.vimeo.com' && (m = p.match(/^\/video\/(\d+)/)))) {
+        const v = `https://vimeo.com/${m[1]}`;
+        return { provider: 'Vimeo', playlist: false, url: v, page: u.href, oembed: `https://vimeo.com/api/oembed.json?url=${encodeURIComponent(v)}` };
+      }
+      if ((host === 'dailymotion.com' && p.startsWith('/video/')) || (host === 'ted.com' && p.startsWith('/talks/')) ||
+          (host === 'loom.com' && p.startsWith('/share/')) || (host === 'twitch.tv' && /^\/videos\/\d+/.test(p)) ||
+          (host === 'streamable.com' && /^\/\w+$/.test(p))) {
+        return { provider: host.split('.')[0], playlist: false, url: u.href, page: u.href, oembed: null };
+      }
+      return null;
+    }
+
+    async function addStream(stream, s) {
+      // URL activities are named by the professor; otherwise use the video's own title.
+      let title = s.fromUrlModule || !s.autoTitle ? s.title : '';
+      if (stream.oembed) {
+        const r = await fetchExternalText(stream.oembed);
+        if (r && r.status >= 400 && r.status < 500) {
+          // Private or removed video: nothing to download, keep the link.
+          add(s.slot, makeItem({ kind: 'link', source: s.source, url: stream.page, title: s.title, useTitle: true, category: 'links' }, s.ctx));
+          return;
+        }
+        try {
+          const oembedTitle = r && r.ok ? cleanText(JSON.parse(r.text).title) : '';
+          if (oembedTitle && !s.fromUrlModule) title = oembedTitle;
+        } catch (e) { /* keep the link text */ }
+      }
+      add(s.slot, makeItem({
+        kind: 'stream', source: s.source, url: stream.url, webUrl: stream.page, provider: stream.provider,
+        playlist: stream.playlist, title, useTitle: true, category: 'videos'
+      }, s.ctx));
+    }
+
+    // Version-control and tool folders inside shared folders aren't material.
+    const isSystemName = name => /^\./.test(name) || /^(__pycache__|__MACOSX|node_modules|Thumbs\.db|desktop\.ini)$/i.test(name);
+
+    function driveFolderId(u) {
+      if (u.hostname !== 'drive.google.com') return null;
+      const m = u.pathname.match(/\/folders\/([\w-]+)/);
+      return m ? m[1] : (u.pathname === '/folderview' ? u.searchParams.get('id') : null);
+    }
+
+    const DRIVE_MAX_FILES = 300;
+    const DRIVE_MAX_DEPTH = 4;
+
+    // Files listed from a cloud folder remember it (`bundle`), so the popup can
+    // pack the ones picked into a single <folder>.zip. `at` is the position of
+    // the folder's own name in the item's `inner` path.
+    const cloudBundle = (key, name, ctx) => ({ key, name, at: (ctx.inner || []).length });
+
+    // Public Drive folders: every file inside, keeping sub-folders.
+    async function expandDriveFolder(id, s, path = null, depth = 0, budget = { files: 0 }, bundle = null) {
+      const r = await fetchExternalText(`https://drive.google.com/embeddedfolderview?id=${id}`);
+      if (!r || !r.ok || !r.text) return false;
+      const doc = parser.parseFromString(r.text, 'text/html');
+      if (!doc.querySelector('.flip-entries, .flip-entry')) return false; // private folder or sign-in page
+      const name = cleanText(doc.title) || 'Google Drive folder';
+      const folderName = s.fromUrlModule ? s.title : name;
+      const folderPath = path || [...(s.ctx.inner || []), folderName];
+      bundle = bundle || cloudBundle(`drive:${id}`, folderName, s.ctx);
+      const jobs = [];
+      for (const entry of doc.querySelectorAll('.flip-entry')) {
+        const a = entry.querySelector('a[href]');
+        const entryTitle = cleanText(entry.querySelector('.flip-entry-title')?.textContent);
+        if (!a || !entryTitle || isSystemName(entryTitle)) continue;
+        let eu;
+        try { eu = new URL(a.getAttribute('href'), 'https://drive.google.com/'); } catch (e) { continue; }
+        const sub = driveFolderId(eu);
+        if (sub) {
+          if (depth < DRIVE_MAX_DEPTH) jobs.push(expandDriveFolder(sub, s, [...folderPath, entryTitle], depth + 1, budget, bundle));
+          continue;
+        }
+        if (budget.files++ >= DRIVE_MAX_FILES) break;
+        const g = googleExport(eu);
+        if (!g) continue;
+        jobs.push((async () => {
+          const probe = await probeFile(g.url, g);
+          if (probe && (!probe.ok || /text\/html/i.test(probe.contentType || ''))) return; // no access
+          const origName = g.ext && extOf(entryTitle) !== g.ext ? `${entryTitle}${g.ext}` : entryTitle;
+          add(s.slot, makeItem({
+            source: s.source, url: g.url, webUrl: eu.href, origName, ext: extOf(origName), size: probe?.size ?? null,
+            mime: probe?.contentType || null, title: origName, useTitle: false, category: s.category || 'files', bundle
+          }, { ...s.ctx, inner: folderPath }));
+        })());
+      }
+      await Promise.all(jobs);
+      return true;
+    }
+
+    // SharePoint / OneDrive for Business "anyone with the link" folders.
+    async function expandSharePoint(url, s) {
+      const list = await askBackground({ type: 'mca-sharepoint', url });
+      if (!list || !list.files || !list.files.length) return false;
+      const folderName = s.fromUrlModule ? s.title : list.name;
+      const base = [...(s.ctx.inner || []), folderName];
+      const bundle = cloudBundle(`sharepoint:${url}`, folderName, s.ctx);
+      for (const f of list.files) {
+        if (isSystemName(f.name) || f.rel.some(isSystemName)) continue;
+        add(s.slot, makeItem({
+          source: s.source, url: f.url, webUrl: url, origName: f.name, ext: extOf(f.name), size: f.size,
+          title: f.name, useTitle: false, prime: url, category: s.category || 'files', bundle
+        }, { ...s.ctx, inner: [...base, ...f.rel] }));
+      }
+      return true;
+    }
+
+    // Nextcloud / ownCloud public shares (…/s/<token>): a shared file is
+    // downloaded as is; a shared folder is listed file by file (falling back to
+    // the server's zip of the whole folder if it can't be listed).
+    const CLOUD_SHARE_PATH = /^(?:\/index\.php)?\/s\/[A-Za-z0-9]{8,}\/?$/;
+    async function addCloudShare(u, s) {
+      const r = await fetchExternalText(u.href);
+      if (!r || !r.ok || !/nextcloud|owncloud/i.test(r.text || '')) return false;
+      const doc = parser.parseFromString(r.text, 'text/html');
+      if (doc.querySelector('input[type="password"]')) return false; // password-protected share
+      const name = cleanText(doc.querySelector('meta[property="og:title"]')?.content) || 'Shared folder';
+      const mime = doc.querySelector('input[name="mimetype"]')?.value || '';
+      const isFolder = mime ? mime === 'httpd/unix-directory' : !FILE_EXT.has(extOf(name).slice(1));
+      if (isFolder) {
+        const token = u.pathname.replace(/\/$/, '').split('/').pop();
+        const base = u.origin; // CLOUD_SHARE_PATH only matches shares served from the site root
+        const list = await askBackground({ type: 'mca-nextcloud', base, token });
+        if (list && list.files && list.files.length) {
+          const folderName = s.fromUrlModule ? s.title : name;
+          // Nextcloud can zip a list of files itself (?accept=zip&files=[…]), streamed
+          // straight to disk: no local zip building needed.
+          const bundle = { ...cloudBundle(`nextcloud:${u.origin}/${token}`, folderName, s.ctx), serverZip: `${base}/public.php/dav/files/${token}/` };
+          for (const f of list.files) {
+            if (isSystemName(f.name) || f.rel.some(isSystemName)) continue;
+            add(s.slot, makeItem({
+              source: s.source, url: f.url, webUrl: u.href, origName: f.name, ext: extOf(f.name), size: f.size,
+              title: f.name, useTitle: false, category: s.category || 'files', bundle, sharePath: [...f.rel, f.name].join('/')
+            }, { ...s.ctx, inner: [...(s.ctx.inner || []), folderName, ...f.rel] }));
+          }
+          return true;
+        }
+      }
+      const origName = isFolder ? `${name}.zip` : name;
+      add(s.slot, makeItem({
+        source: s.source, url: `${u.href.replace(/\/$/, '')}/download`, webUrl: u.href, origName, ext: extOf(origName),
+        title: s.fromUrlModule ? s.title : origName, useTitle: s.fromUrlModule, category: s.category || 'files'
+      }, s.ctx));
+      return true;
+    }
+
+    // Binder launches a GitHub repository (usually the course's notebooks).
+    function binderRepoZip(u) {
+      const m = /(^|\.)mybinder\.org$/.test(u.hostname) && u.pathname.match(/^\/v2\/gh\/([^/]+)\/([^/]+)\/([^/?#]+)/);
+      if (!m) return null;
+      const ref = decodeSegment(m[3]);
+      return { url: `https://codeload.github.com/${m[1]}/${m[2]}/zip/${encodeURIComponent(ref)}`, origName: `${m[2]}-${ref}.zip` };
+    }
+
+    function isDownloadCandidate(cu) {
+      if (cu.origin === origin || isNoiseLink(cu)) return false;
+      if (videoStream(cu) || googleExport(cu)) return true;
+      const ext = extOf(filenameFromUrl(cu.href));
+      return !!ext && FILE_EXT.has(ext.slice(1));
+    }
+
+    const HUB_MAX_ITEMS = 80;       // more than this is a catalog (e.g. conference proceedings)
+    const HUB_WORDS_PER_ITEM = 15;  // a short caption per file is fine, real prose is not
+    const HUB_MIN_WORDS = 150;
+
+    // A web page linked from the course: download what it offers when the page
+    // is just a way to reach files (a paper's landing page, a file list, a
+    // directory index). Pages with their own content stay links.
+    async function inspectWebPage(url, s) {
+      const r = await fetchExternalText(url);
+      if (!r || !r.ok || !/html/i.test(r.contentType || '') || !r.text) return false;
+      const doc = parser.parseFromString(r.text, 'text/html');
+      const pageUrl = r.finalUrl || url;
+      const abs = h => { try { return new URL(h, pageUrl); } catch (e) { return null; } };
+
+      // Paper landing pages (arXiv, OpenReview, PMLR, ACL, publishers…) name their PDF.
+      const pdfMeta = doc.querySelector('meta[name="citation_pdf_url"]')?.content;
+      if (pdfMeta) {
+        const pdf = abs(pdfMeta);
+        const probe = pdf && await probeExternal(pdf.href);
+        if (!probe || !probe.ok || /text\/html/i.test(probe.contentType || '')) return false; // paywalled
+        const paperTitle = cleanText(doc.querySelector('meta[name="citation_title"]')?.content);
+        add(s.slot, makeItem({
+          source: s.source, url: pdf.href, webUrl: url, origName: null, ext: '.pdf', size: probe.size ?? null,
+          title: s.fromUrlModule || !paperTitle ? s.title : paperTitle, useTitle: true, category: s.category || 'files'
+        }, s.ctx));
+        return true;
+      }
+
+      const pageTitle = cleanText(doc.title) || s.title;
+      doc.querySelectorAll('script, style, noscript, nav, header, footer, aside, form, svg, template').forEach(n => n.remove());
+      if (!doc.body) return false;
+      const words = t => ((t || '').match(/\S+/g) || []).length;
+      let linkWords = 0;
+      const candidates = new Map();
+      doc.body.querySelectorAll('a[href], iframe[src]').forEach(el => {
+        if (el.tagName === 'A') linkWords += words(el.textContent);
+        const cu = abs(el.getAttribute('href') || el.getAttribute('src'));
+        if (!cu || !/^https?:$/.test(cu.protocol)) return;
+        cu.hash = '';
+        if (isDownloadCandidate(cu) && !candidates.has(cu.href)) {
+          candidates.set(cu.href, cleanText(el.textContent) || el.getAttribute('title') || '');
+        }
+      });
+      const n = candidates.size;
+      const contentWords = words(doc.body.textContent) - linkWords;
+      const isIndex = /^index of\b/i.test(pageTitle);
+      if (n === 0 || n > HUB_MAX_ITEMS) return false;
+      if (!isIndex && contentWords > Math.max(HUB_MIN_WORDS, HUB_WORDS_PER_ITEM * n)) return false;
+
+      const hubCtx = { ...s.ctx, inner: [...(s.ctx.inner || []), s.fromUrlModule ? s.title : pageTitle] };
+      const subs = Array.from(candidates, ([href, text]) => {
+        const sub = [];
+        return { sub, run: addTarget(sub, href, linkTitle(text, href), hubCtx, s.source, s.depth + 1, false, s.category) };
+      });
+      await Promise.all(subs.map(x => x.run.catch(() => {})));
+      const found = subs.flatMap(x => x.sub).filter(it => it.kind !== 'link');
+      found.forEach(it => s.slot.push(it));
+      return found.length > 0;
     }
 
     function niceTitle(u) {
@@ -629,13 +892,14 @@ ${clone.innerHTML}
       if (/(^|\.)google\.[a-z.]+$/.test(host) && u.pathname === '/url') target = u.searchParams.get('q') || u.searchParams.get('url');
       else if (/(^|\.)facebook\.com$/.test(host) && u.pathname === '/l.php') target = u.searchParams.get('u');
       else if (/safelinks\.protection\.outlook\.com$/.test(host)) target = u.searchParams.get('url');
+      else if (/\.awstrack\.me$/.test(host) && u.pathname.startsWith('/L0/')) target = decodeSegment(u.pathname.slice(4).split('/')[0]);
       if (target) { try { return new URL(target); } catch (e) { /* keep original */ } }
       return u;
     }
 
     // Adds whatever `url` points to: a Moodle file/module, a downloadable
     // external file, or a web link (saved as a shortcut).
-    async function addTarget(slot, url, title, ctx, source, depth, fromUrlModule, category) {
+    async function addTarget(slot, url, title, ctx, source, depth, fromUrlModule, category, redirected = false) {
       let u;
       try { u = new URL(url); } catch (e) { return; }
       if (!/^https?:$/.test(u.protocol)) return;
@@ -664,22 +928,56 @@ ${clone.innerHTML}
       }
 
       if (isNoiseLink(u)) return;
+      if (autoTitle) fromUrlModule = false; // an activity named with a bare URL names nothing
       const display = title || linkTitle('', url);
       const addLink = () => add(slot, makeItem({ kind: 'link', source, url, title: display, useTitle: true, category: 'links' }, ctx));
-      if (LINK_ONLY_HOSTS.test(u.hostname)) return addLink();
+      const s = { slot, title: display, autoTitle, ctx, source, depth, category, fromUrlModule };
+
+      // Links that lead to downloadable material without being files themselves.
+      const stream = videoStream(u);
+      if (stream) return addStream(stream, s);
+      if (LINK_ONLY_HOSTS.test(u.hostname)) return addLink(); // channels, profiles…
+      const folderId = driveFolderId(u);
+      if (folderId) {
+        if (!(await expandDriveFolder(folderId, s))) addLink();
+        return;
+      }
+      if (/(^|\.)sharepoint\.com$/i.test(u.hostname) && u.pathname.startsWith('/:f:/')) {
+        if (!(await expandSharePoint(url, s))) addLink();
+        return;
+      }
+      if (CLOUD_SHARE_PATH.test(u.pathname) && await addCloudShare(u, s)) return;
 
       // Work out where the file would come from…
       const g = googleExport(u);
-      const known = g ? null : knownFileUrl(u);
+      const binder = g ? null : binderRepoZip(u);
+      let known = g ? null : (binder || knownFileUrl(u));
+      if (!g && !known && /(^|\.)sharepoint\.com$/i.test(u.hostname) && /^\/:[a-z]:\//.test(u.pathname)) {
+        const d = new URL(u.href);
+        d.searchParams.set('download', '1'); // single shared file
+        known = { url: d.href, origName: null };
+      }
       const fileUrl = g ? g.url : known ? known.url : url;
       let origName = known ? known.origName : null;
       let ext = g ? g.ext : extOf(origName);
 
       // …then ask the server. A web page here means a site, a login wall or a
-      // "no access" page: keep it as a link, never save it as a file.
-      const probe = await probeExternal(fileUrl);
+      // "no access" page: never save it as a file.
+      const probe = binder ? { ok: true, contentType: 'application/zip' } : await probeFile(fileUrl, g);
       const servesPage = probe && (!probe.ok || /text\/html|application\/xhtml/i.test(probe.contentType || ''));
-      if (servesPage || (!probe && !g && !known)) return addLink();
+      if (servesPage || (!probe && !g && !known)) {
+        // Short links (bit.ly, tinyurl…): classify where they really lead, once.
+        if (!redirected && probe?.finalUrl) {
+          try {
+            if (new URL(probe.finalUrl).hostname !== u.hostname) {
+              return addTarget(slot, probe.finalUrl, autoTitle ? '' : title, ctx, source, depth, fromUrlModule, category, true);
+            }
+          } catch (e) { /* fall through */ }
+        }
+        // Only pages linked straight from Moodle are inspected, never pages found on pages.
+        if (probe?.ok && depth === 0 && await inspectWebPage(fileUrl, s)) return;
+        return addLink();
+      }
 
       if (probe?.filename) {
         origName = probe.filename;

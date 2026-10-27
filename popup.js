@@ -26,7 +26,8 @@ const DEFAULT_PREFS = {
   numberSections: true,
   labelFolders: true,
   fileNames: 'title',
-  showDuplicates: false
+  showDuplicates: false,
+  zipClouds: true
 };
 
 function formatSize(bytes) {
@@ -69,10 +70,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('opt-labels').checked = prefs.labelFolders;
   $('opt-names').value = prefs.fileNames;
   $('opt-dupes').checked = prefs.showDuplicates;
+  $('opt-zip').checked = prefs.zipClouds;
   const savePref = (key, value) => { prefs[key] = value; chrome.storage.local.set({ [key]: value }); render(); };
   $('opt-number').addEventListener('change', e => savePref('numberSections', e.target.checked));
   $('opt-labels').addEventListener('change', e => savePref('labelFolders', e.target.checked));
   $('opt-dupes').addEventListener('change', e => savePref('showDuplicates', e.target.checked));
+  $('opt-zip').addEventListener('change', e => savePref('zipClouds', e.target.checked));
   $('opt-names').addEventListener('change', e => savePref('fileNames', e.target.value));
 
   // --- talk to the page ----------------------------------------------------
@@ -181,6 +184,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   function iconFor(item) {
     if (item.kind === 'link') return '🔗';
     if (item.kind === 'page') return '📰';
+    if (item.kind === 'stream') return '▶️';
     const ext = (item.ext || mcaExtOf(item.origName) || '').replace('.', '');
     return ICONS[ext] || '📄';
   }
@@ -210,7 +214,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       courseFolder: courseInput.value,
       numberSections: prefs.numberSections,
       labelFolders: prefs.labelFolders,
-      originalNames: prefs.fileNames === 'original'
+      originalNames: prefs.fileNames === 'original',
+      zipClouds: prefs.zipClouds
     };
   }
 
@@ -223,7 +228,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     scan.sections.forEach(section => section.items.forEach(item => { if (visible(item)) all.push({ section, item }); }));
     // Compute final paths for every visible item so the list shows exactly what will be saved.
     const jobs = mcaBuildJobs(scan, all, opts);
-    const pathOf = new Map(jobs.map(j => [j.itemId, j.filename]));
+    const pathOf = new Map(jobs.flatMap(j => (j.kind === 'zip' ? j.items.map(i => [i.itemId, i.filename]) : [[j.itemId, j.filename]])));
 
     const scrollTop = filesDiv.scrollTop;
     filesDiv.innerHTML = '';
@@ -337,24 +342,46 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (visible(item) && selected.has(item.id)) chosen.push({ section, item });
     }));
     if (chosen.length === 0) return;
-    const jobs = mcaBuildJobs(scan, chosen, currentOpts());
+    const opts = currentOpts();
+    const all = mcaBuildJobs(scan, chosen, opts);
+    // Online videos can't be fetched by Chrome itself: they go into a yt-dlp script.
+    const streams = all.filter(j => j.kind === 'stream');
+    const jobs = all.filter(j => j.kind !== 'stream');
+    if (streams.length) {
+      const platform = /Windows/i.test(navigator.userAgent) ? 'windows' : 'unix';
+      const script = mcaBuildVideoScript(streams, opts.courseFolder || scan.courseName, platform);
+      jobs.push({ kind: 'text', filename: script.filename, text: script.text });
+    }
     downloadBtn.disabled = true;
     await chrome.runtime.sendMessage({ type: 'download-jobs', jobs });
-    dlStatus.textContent = `Starting ${jobs.length} downloads…`;
+    scriptNote = streams.length
+      ? `${streams.length} online video(s) go into "${jobs[jobs.length - 1].filename.split('/').pop()}" in the course folder. ` +
+        'Run it to download them (it needs yt-dlp; Chrome may ask you to "Keep" the script first).'
+      : '';
+    dlStatus.textContent = `Starting ${jobs.length} downloads… ${scriptNote}`;
   });
+
+  let scriptNote = '';
 
   // --- download status -----------------------------------------------------
 
   function showDownloadStatus(s) {
     if (!s) { dlStatus.textContent = ''; return; }
     const done = s.completed + s.failed.length;
-    let text = s.running || done < s.total
+    let text = s.packing
+      ? `Packing ${s.packing.name}… ${s.packing.done}/${s.packing.total} files (${s.completed}/${s.total} saved)`
+      : s.running || done < s.total
       ? `Downloading… ${s.completed}/${s.total} saved`
       : `Finished: ${s.completed}/${s.total} saved`;
     if (s.failed.length) text += `, ${s.failed.length} failed`;
     if (s.held > 0) text += `. ${s.held} waiting for you to click "Keep" in Chrome's downloads (Ctrl+J)`;
     dlStatus.innerHTML = '';
     dlStatus.append(text);
+    if (scriptNote) {
+      const note = document.createElement('div');
+      note.textContent = scriptNote;
+      dlStatus.appendChild(note);
+    }
     if (s.failed.length) {
       const det = document.createElement('details');
       det.innerHTML = '<summary>Show failed downloads</summary>';
